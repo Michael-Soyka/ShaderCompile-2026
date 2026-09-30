@@ -33,12 +33,14 @@ public:
 	void Add( const std::string& fileName, std::vector<char>&& data );
 
 	[[nodiscard]] const CSharedFile* Get( const std::string& filename ) const;
+	[[nodiscard]] const std::string* NameOf( const void* data ) const;
 
 	void Clear();
 
 protected:
 	typedef robin_hood::unordered_node_map<std::string, CSharedFile> Mapping;
 	Mapping m_map;
+	robin_hood::unordered_flat_map<const void*, const std::string*> m_names;
 };
 
 extern FileCache fileCache;
