@@ -3,12 +3,21 @@ Standalone shadercompile, that doesn't depend on valve libraries and supports x6
 on external tools (no perl or DxSdk)
 ## Usage
 ```
-ShaderCompile.exe [OPTIONS] -ver n -shaderdir src_dir shader.fxc
+ShaderCompile.exe [OPTIONS] -shaderpath src_dir
 ```
+Shaders are listed in `src_dir/shaders.toml`, grouped by tables:
+```toml
+[lightmappedgeneric]
+version = '30'   # optional, otherwise taken from file name suffix
+files = [ 'lightmappedgeneric/lightmappedgeneric_ps3x.fxc', 'lightmappedgeneric/lightmappedgeneric_vs30.fxc' ]
+```
+Paths are relative to `src_dir`. `#include` is resolved relative to the including file first, then relative to `src_dir`.
+Without `-group` all groups are compiled.
 ## Options
 ```
--ver ARG                       Sets shader version, required
--shaderpath ARG                Base path for shaders, required
+-shaderpath ARG                Base path for shaders, must contain shaders.toml, required
+-group ARG                     Compile only these groups from shaders.toml
+-game ARG                      Copy compiled shaders of selected groups to game directory
 -crc                           Calculate crc for shader
 -dynamic                       Generate only header
 -force                         Skip crc check during compilation
@@ -27,14 +36,17 @@ ShaderCompile.exe [OPTIONS] -ver n -shaderdir src_dir shader.fxc
 -no-validation, /Vd            Skips shader validation
 ```
 ## Shader model version support
-All shader models starting from PS2.b/VS2.0
+Minimum shader model is 3.0. Supported versions: `30`, `40`, `41`, `50`, `51`.
 &NewLine;  
 &NewLine;  
-Valid options for  `-ver`
+Version from file name suffix
 ```
-20          ps2b/vs20
-30          ps30/vs30
+30, 40, 41, 50, 51   as is
+xx, 3x               30
+4x                   40
+5x                   50
 ```
+Shaders below 3.0 (`2x`, `20`, `20b`) are skipped with a warning.
 ## Getting started
 This assumes you have "clean" Source SDK2013 project.
 1. In `game_shader_dx9_base.vpc` replace `$AdditionalIncludeDirectories	"$BASE;fxctmp9;vshtmp9;"`
@@ -43,13 +55,14 @@ This assumes you have "clean" Source SDK2013 project.
 VS2013 folder
 3. Place `ShaderCompile.exe` and `process_shaders.ps1` to devtools/bin folder where `vpc.exe` is located
 4. Replace `buildshaders.bat` with one from this repo
-5. In `buildsdkshaders.bat`, remove from all commands `-dx9_30` so
+5. Put `shaders.toml` into the shader source folder instead of `<project>.txt` lists, and in `buildsdkshaders.bat`
+ pass a group name (or `all`) instead of the project name, without `-dx9_30` and `-force30`, so
     ```batch
     %BUILD_SHADER% stdshader_dx9_30 -game %GAMEDIR% -source %SOURCEDIR% -dx9_30 -force30 
     ```
     looks like
     ```batch
-    %BUILD_SHADER% stdshader_dx9_30 -game %GAMEDIR% -source %SOURCEDIR% -force30
+    %BUILD_SHADER% all -game %GAMEDIR% -source %SOURCEDIR%
     ```
 6. Optionally remove all perl scripts for compiling shaders from devtools/bin, as they will be never used again
     ```
