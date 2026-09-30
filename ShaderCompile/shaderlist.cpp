@@ -88,8 +88,9 @@ std::optional<std::vector<ShaderList::Entry>> ShaderList::Load( const fs::path& 
 	}
 
 	const std::set<std::string> selected( groups.begin(), groups.end() );
-	std::map<std::string, std::string> owners;
+	std::map<std::string, std::string> versions;
 	std::map<std::string, std::string> outputs;
+	std::set<std::string> added;
 	std::vector<Entry> entries;
 
 	for ( auto&& [key, node] : config )
@@ -148,13 +149,6 @@ std::optional<std::vector<ShaderList::Entry>> ShaderList::Load( const fs::path& 
 				continue;
 			}
 
-			if ( const auto [owner, inserted] = owners.emplace( *path, group ); !inserted )
-			{
-				Error( "\""s + *path + "\" is listed in groups \""s + owner->second + "\" and \""s + group + "\""s );
-				failed = true;
-				continue;
-			}
-
 			const std::string fileName = fs::path( *path ).filename().string();
 			const auto version = ResolveVersion( fileName, groupVersion );
 			if ( version.status == VersionStatus::BelowMinimum )
@@ -177,15 +171,22 @@ std::optional<std::vector<ShaderList::Entry>> ShaderList::Load( const fs::path& 
 				continue;
 			}
 
+			if ( const auto [known, inserted] = versions.emplace( *path, version.version ); !inserted && known->second != version.version )
+			{
+				Error( "\""s + *path + "\" resolves to different versions \""s + known->second + "\" and \""s + version.version + "\" in different groups"s );
+				failed = true;
+				continue;
+			}
+
 			const std::string output = Parser::ConstructName( fileName, target, version.version );
-			if ( const auto [other, inserted] = outputs.emplace( output, *path ); !inserted )
+			if ( const auto [other, inserted] = outputs.emplace( output, *path ); !inserted && other->second != *path )
 			{
 				Error( "\""s + other->second + "\" and \""s + *path + "\" both produce \""s + output + "\""s );
 				failed = true;
 				continue;
 			}
 
-			if ( selected.empty() || selected.contains( group ) )
+			if ( ( selected.empty() || selected.contains( group ) ) && added.insert( *path ).second )
 				entries.emplace_back( Entry{ *path, version.version, target, group } );
 		}
 	}
