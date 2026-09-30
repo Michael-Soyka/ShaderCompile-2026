@@ -1185,16 +1185,15 @@ static std::unique_ptr<CfgProcessor::CfgEntryInfo[]> Shared_ParseListOfCompileCo
 
 	bool failed = false;
 	std::vector<CfgProcessor::ShaderConfig> configs;
-	const auto root = g_pShaderPath.string();
 	for ( const auto& file : files )
 	{
 		uint32_t crc;
 		std::string name = Parser::ConstructName( file.name, file.target, file.version );
-		if ( Parser::CheckCrc( g_pShaderPath / file.name, root, name, crc ) && !bForce )
+		if ( Parser::CheckCrc( file.name, g_pShaderPath, name, crc ) && !bForce )
 			continue;
 
 		CfgProcessor::ShaderConfig conf;
-		if ( !Parser::ParseFile( g_pShaderPath / file.name, root, file.target, file.version, conf ) )
+		if ( !Parser::ParseFile( file.name, g_pShaderPath, file.target, file.version, conf ) )
 		{
 			std::cout << clr::red << "Failed to parse "sv << file.name << clr::reset << std::endl;
 			failed = true;
@@ -1681,12 +1680,11 @@ int main( int argc, const char* argv[] )
 
 	if ( cmdLine.isSet( "-crc" ) )
 	{
-		const auto root = g_pShaderPath.string();
 		for ( const auto& file : files )
 		{
 			const std::string name = Parser::ConstructName( file.name, file.target, file.version );
 			uint32_t crc = 0;
-			Parser::CheckCrc( g_pShaderPath / file.name, root, name, crc );
+			Parser::CheckCrc( file.name, g_pShaderPath, name, crc );
 			std::cout << crc << std::endl;
 		}
 		return 0;
@@ -1696,11 +1694,10 @@ int main( int argc, const char* argv[] )
 	if ( cmdLine.isSet( "-dynamic" ) )
 	{
 		bool failed = false;
-		const auto root = g_pShaderPath.string();
 		for ( const auto& file : files )
 		{
 			CfgProcessor::ShaderConfig conf;
-			if ( !Parser::ParseFile( g_pShaderPath / file.name, root, file.target, file.version, conf ) )
+			if ( !Parser::ParseFile( file.name, g_pShaderPath, file.target, file.version, conf ) )
 			{
 				std::cout << clr::red << "Failed to parse "sv << file.name << clr::reset << std::endl;
 				failed = true;

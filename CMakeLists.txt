@@ -19,6 +19,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(SRC
     ShaderCompile/cfgprocessor.cpp
     ShaderCompile/d3dxfxc.cpp
+    ShaderCompile/includepath.cpp
     ShaderCompile/ShaderCompile.cpp
     ShaderCompile/shaderparser.cpp
     ShaderCompile/utlbuffer.cpp
