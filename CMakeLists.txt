@@ -21,6 +21,7 @@ set(SRC
     ShaderCompile/d3dxfxc.cpp
     ShaderCompile/includepath.cpp
     ShaderCompile/ShaderCompile.cpp
+    ShaderCompile/shaderlist.cpp
     ShaderCompile/shaderparser.cpp
     ShaderCompile/utlbuffer.cpp
     )
