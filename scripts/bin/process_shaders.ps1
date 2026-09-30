@@ -17,5 +17,5 @@ if ($Threads -ne 0) {
     $arguments += @("-threads", $Threads)
 }
 
-& "$PSScriptRoot\ShaderCompile" @arguments
+& "$PSScriptRoot\ShaderCompile26" @arguments
 exit $LASTEXITCODE

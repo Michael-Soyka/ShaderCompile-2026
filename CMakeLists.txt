@@ -27,6 +27,7 @@ set(SRC
     )
 
 add_executable(ShaderCompile ${SRC})
+set_target_properties(ShaderCompile PROPERTIES OUTPUT_NAME ShaderCompile26)
 target_link_libraries(ShaderCompile PRIVATE re2::re2 Microsoft.GSL::GSL tomlplusplus::tomlplusplus)
 include_directories(ShaderCompile/include shared/re2)
 

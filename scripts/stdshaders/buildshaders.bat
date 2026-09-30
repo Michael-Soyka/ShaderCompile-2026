@@ -21,7 +21,7 @@ REM ****************
 
 setlocal
 set arg_filename=%1
-set shadercompilecommand=ShaderCompile.exe
+set shadercompilecommand=ShaderCompile26.exe
 set targetdir=shaders
 set SrcDirBase=..\..
 set shaderDir=shaders
@@ -51,7 +51,7 @@ REM MOD ARGS - look for -game or the vproject environment variable
 REM ****************
 :set_mod_args
 
-if not exist "..\..\devtools\bin\ShaderCompile.exe" goto NoShaderCompile
+if not exist "..\..\devtools\bin\ShaderCompile26.exe" goto NoShaderCompile
 set ChangeToDir=%SrcDirBase%\devtools\bin\
 
 if /i "%4" NEQ "-source" goto NoSourceDirSpecified
@@ -84,7 +84,7 @@ goto usage
 goto end
 
 :NoShaderCompile
-echo - ERROR: ShaderCompile.exe doesn't exist in devtools\bin
+echo - ERROR: ShaderCompile26.exe doesn't exist in devtools\bin
 goto end
 
 REM ****************

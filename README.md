@@ -3,7 +3,7 @@ Standalone shadercompile, that doesn't depend on valve libraries and supports x6
 on external tools (no perl or DxSdk)
 ## Usage
 ```
-ShaderCompile.exe [OPTIONS] -shaderpath src_dir
+ShaderCompile26.exe [OPTIONS] -shaderpath src_dir
 ```
 Shaders are listed in `src_dir/shaders.toml`, grouped by tables:
 ```toml
@@ -53,7 +53,7 @@ This assumes you have "clean" Source SDK2013 project.
  with `$AdditionalIncludeDirectories	"$BASE;include"` , shader headers will be now located in more sensible place
 2. Replace `cshader.h` in public/shaderlib with one from this repo, if you are using VS2013 compiler use the one from
 VS2013 folder
-3. Place `ShaderCompile.exe` and `process_shaders.ps1` to devtools/bin folder where `vpc.exe` is located
+3. Place `ShaderCompile26.exe` and `process_shaders.ps1` to devtools/bin folder where `vpc.exe` is located
 4. Replace `buildshaders.bat` with one from this repo
 5. Put `shaders.toml` into the shader source folder instead of `<project>.txt` lists, and in `buildsdkshaders.bat`
  pass a group name (or `all`) instead of the project name, without `-dx9_30` and `-force30`, so
