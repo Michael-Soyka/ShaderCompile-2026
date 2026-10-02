@@ -16,12 +16,12 @@ set tt_chkpt=%tt_start%
 
 
 REM ****************
-REM usage: buildshaders <shaderProjectName>
+REM usage: buildshaders <group|all>
 REM ****************
 
 setlocal
 set arg_filename=%1
-set shadercompilecommand=ShaderCompile.exe
+set shadercompilecommand=ShaderCompile26.exe
 set targetdir=shaders
 set SrcDirBase=..\..
 set shaderDir=shaders
@@ -29,16 +29,6 @@ set SDKArgs=-local
 
 if "%1" == "" goto usage
 set inputbase=%1
-
-REM ignore -dx9_30
-if /i "%6" == "-dx9_30" shift /6
-
-if /i "%6" == "-force30" goto set_force30_arg
-goto set_force_end
-:set_force30_arg
-			set IS30=1
-			goto set_force_end
-:set_force_end
 
 if /i "%2" == "-game" goto set_mod_args
 goto build_shaders
@@ -48,11 +38,12 @@ REM USAGE
 REM ****************
 :usage
 echo.
-echo "usage: buildshaders <shaderProjectName> [-game] [gameDir if -game was specified] [-source sourceDir]"
+echo "usage: buildshaders <group|all> [-game] [gameDir if -game was specified] [-source sourceDir]"
+echo "       group is a table name from shaders.toml, all builds every group."
 echo "       gameDir is where gameinfo.txt is (where it will store the compiled shaders)."
 echo "       sourceDir is where the source code is (where it will find scripts and compilers)."
-echo "ex   : buildshaders myshaders"
-echo "ex   : buildshaders myshaders -game c:\steam\steamapps\sourcemods\mymod -source c:\mymod\src"
+echo "ex   : buildshaders all"
+echo "ex   : buildshaders lightmappedgeneric -game c:\steam\steamapps\sourcemods\mymod -source c:\mymod\src"
 goto :end
 
 REM ****************
@@ -60,7 +51,7 @@ REM MOD ARGS - look for -game or the vproject environment variable
 REM ****************
 :set_mod_args
 
-if not exist "..\..\devtools\bin\ShaderCompile.exe" goto NoShaderCompile
+if not exist "..\..\devtools\bin\ShaderCompile26.exe" goto NoShaderCompile
 set ChangeToDir=%SrcDirBase%\devtools\bin\
 
 if /i "%4" NEQ "-source" goto NoSourceDirSpecified
@@ -71,7 +62,7 @@ set targetdir=%~3\shaders
 
 if not exist "%~3\gameinfo.txt" goto InvalidGameDirectory
 
-if not exist "%inputbase%.txt" goto InvalidInputFile
+if not exist "shaders.toml" goto InvalidInputFile
 
 goto build_shaders
 
@@ -84,7 +75,7 @@ echo (The -game directory must have a gameinfo.txt file)
 goto end
 
 :InvalidInputFile
-echo Error: "%inputbase%.txt" is not a valid file.
+echo Error: shaders.toml not found in %CD%.
 goto end
 
 :NoSourceDirSpecified
@@ -93,7 +84,7 @@ goto usage
 goto end
 
 :NoShaderCompile
-echo - ERROR: ShaderCompile.exe doesn't exist in devtools\bin
+echo - ERROR: ShaderCompile26.exe doesn't exist in devtools\bin
 goto end
 
 REM ****************
@@ -111,18 +102,15 @@ if not exist %shaderDir% mkdir %shaderDir%
 if not exist %shaderDir%\fxc mkdir %shaderDir%\fxc
 REM Nuke some files that we will add to later.
 
-set SHVER=20b
-if defined IS30 (
-	set SHVER=30
-)
-
-title %1 %SHVER%
+title %1
 
 echo Building inc files and worklist for %inputbase%...
 
 set DYNAMIC=
 if "%dynamic_shaders%" == "1" set DYNAMIC=-Dynamic
-powershell -NoLogo -ExecutionPolicy Bypass -Command "%SrcDirBase%\devtools\bin\process_shaders.ps1 %DYNAMIC% -Version %SHVER% '%inputbase%.txt'"
+set GROUPARG=-Group '%inputbase%'
+if /i "%inputbase%" == "all" set GROUPARG=
+powershell -NoLogo -ExecutionPolicy Bypass -Command "%SrcDirBase%\devtools\bin\process_shaders.ps1 %DYNAMIC% -ShaderPath '%CD%' %GROUPARG%"
 
 REM ****************
 REM PC Shader copy

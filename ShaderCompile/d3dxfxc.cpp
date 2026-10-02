@@ -20,7 +20,9 @@
 #include "cmdsink.h"
 #include "d3dcompiler.h"
 #include "gsl/narrow"
+#include "includepath.h"
 #include <malloc.h>
+#include <string>
 #include <vector>
 
 #pragma comment( lib, "D3DCompiler" )
@@ -31,12 +33,9 @@ CSharedFile::CSharedFile( std::vector<char>&& data ) noexcept : std::vector<char
 
 void FileCache::Add( const std::string& fileName, std::vector<char>&& data )
 {
-	const auto& it = m_map.find( fileName );
-	if ( it != m_map.end() )
-		return;
-
-	CSharedFile file( std::forward<std::vector<char>>( data ) );
-	m_map.emplace( fileName, std::move( file ) );
+	const auto [it, inserted] = m_map.try_emplace( fileName, std::move( data ) );
+	if ( inserted && it->second.Data() )
+		m_names.emplace( it->second.Data(), &it->first );
 }
 
 const CSharedFile* FileCache::Get( const std::string& filename ) const
@@ -48,21 +47,42 @@ const CSharedFile* FileCache::Get( const std::string& filename ) const
 	return nullptr;
 }
 
+const std::string* FileCache::NameOf( const void* data ) const
+{
+	const auto find = m_names.find( data );
+	if ( find != m_names.cend() )
+		return find->second;
+	return nullptr;
+}
+
 void FileCache::Clear()
 {
+	m_names.clear();
 	m_map.clear();
 }
 
 FileCache fileCache;
 
-static struct DxIncludeImpl final : public ID3DInclude
+class DxInclude final : public ID3DInclude
 {
-	STDMETHOD( Open )( THIS_ D3D_INCLUDE_TYPE, LPCSTR pFileName, LPCVOID, LPCVOID* ppData, UINT* pBytes ) override
+public:
+	explicit DxInclude( const std::string& mainKey ) noexcept
+		: m_mainKey( mainKey )
 	{
-		const CSharedFile* file = fileCache.Get( pFileName );
-		if ( !file )
+	}
+
+	STDMETHOD( Open )( THIS_ D3D_INCLUDE_TYPE, LPCSTR pFileName, LPCVOID pParentData, LPCVOID* ppData, UINT* pBytes ) override
+	{
+		const std::string* parent = fileCache.NameOf( pParentData );
+		const auto exists = []( const std::string& key )
+		{
+			return fileCache.Get( key ) != nullptr;
+		};
+		const auto resolved = IncludePath::Resolve( parent ? *parent : m_mainKey, pFileName, exists );
+		if ( resolved.status != IncludePath::Status::Ok )
 			return E_FAIL;
 
+		const CSharedFile* file = fileCache.Get( resolved.key );
 		*ppData = file->Data();
 		*pBytes = gsl::narrow<UINT>( file->Size() );
 
@@ -74,8 +94,11 @@ static struct DxIncludeImpl final : public ID3DInclude
 		return S_OK;
 	}
 
-	virtual ~DxIncludeImpl() = default;
-} s_incDxImpl;
+	virtual ~DxInclude() = default;
+
+private:
+	const std::string& m_mainKey;
+};
 
 class CResponse final : public CmdSink::IResponse
 {
@@ -118,15 +141,13 @@ void Compiler::ExecuteCommand( const CfgProcessor::ComboBuildCommand& pCommand, 
 	ID3DBlob* pShader        = nullptr; // NOTE: Must release the COM interface later
 	ID3DBlob* pErrorMessages = nullptr; // NOTE: Must release COM interface later
 
-	LPCVOID lpcvData = nullptr;
-	UINT numBytes    = 0;
-	HRESULT hr       = s_incDxImpl.Open( D3D_INCLUDE_LOCAL, pCommand.fileName.data(), nullptr, &lpcvData, &numBytes );
-	if ( !FAILED( hr ) )
+	const std::string mainKey( pCommand.fileName );
+	const CSharedFile* source = fileCache.Get( mainKey );
+	HRESULT hr = E_FAIL;
+	if ( source )
 	{
-		hr = D3DCompile( lpcvData, numBytes, pCommand.fileName.data(), macros.data(), &s_incDxImpl, pCommand.entryPoint.data(), pCommand.shaderModel.data(), flags, 0, &pShader, &pErrorMessages );
-
-		// Close the file
-		s_incDxImpl.Close( lpcvData );
+		DxInclude include( mainKey );
+		hr = D3DCompile( source->Data(), source->Size(), mainKey.c_str(), macros.data(), &include, pCommand.entryPoint.data(), pCommand.shaderModel.data(), flags, 0, &pShader, &pErrorMessages );
 	}
 
 	pResponse = new( std::nothrow ) CResponse( pShader, pErrorMessages, hr );

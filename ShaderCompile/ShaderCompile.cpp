@@ -47,6 +47,7 @@
 #include "movingaverage.hpp"
 #include "termcolors.hpp"
 #include "strmanip.hpp"
+#include "shaderlist.h"
 #include "shaderparser.h"
 
 extern "C" {
@@ -89,6 +90,7 @@ using namespace std::literals;
 
 using Clock = chrono::high_resolution_clock;
 static fs::path g_pShaderPath;
+static fs::path g_pOutputPath;
 static Clock::time_point g_flStartTime;
 static bool g_bVerbose	= false;
 static bool g_bVerbose2 = false;
@@ -449,7 +451,7 @@ static void OutputDynamicCombo( size_t& pnTotalFlushedSize, CUtlBuffer& pDynamic
 
 static fs::path GetVCSFilenames( const ShaderInfo_t& si )
 {
-	auto path = g_pShaderPath / "shaders"sv / "fxc"sv;
+	auto path = g_pOutputPath / "shaders"sv / "fxc"sv;
 
 	fs::directory_entry status( path );
 	if ( !status.exists() )
@@ -1172,8 +1174,8 @@ static void Shader_ParseShaderInfoFromCompileCommands( const CfgProcessor::CfgEn
 struct ShaderInputData
 {
 	std::string name;
-	std::string_view version;
-	std::string_view target;
+	std::string version;
+	std::string target;
 
 	bool operator==(const ShaderInputData&) const = default;
 	std::strong_ordering operator<=>(const ShaderInputData&) const = default;
@@ -1185,22 +1187,21 @@ static std::unique_ptr<CfgProcessor::CfgEntryInfo[]> Shared_ParseListOfCompileCo
 
 	bool failed = false;
 	std::vector<CfgProcessor::ShaderConfig> configs;
-	const auto root = g_pShaderPath.string();
 	for ( const auto& file : files )
 	{
 		uint32_t crc;
 		std::string name = Parser::ConstructName( file.name, file.target, file.version );
-		if ( Parser::CheckCrc( g_pShaderPath / file.name, root, name, crc ) && !bForce )
+		if ( Parser::CheckCrc( file.name, g_pShaderPath, g_pOutputPath, name, crc ) && !bForce )
 			continue;
 
 		CfgProcessor::ShaderConfig conf;
-		if ( !Parser::ParseFile( g_pShaderPath / file.name, root, file.target, file.version, conf ) )
+		if ( !Parser::ParseFile( file.name, g_pShaderPath, file.target, file.version, conf ) )
 		{
 			std::cout << clr::red << "Failed to parse "sv << file.name << clr::reset << std::endl;
 			failed = true;
 			continue;
 		}
-		Parser::WriteInclude( g_pShaderPath / "include"sv / ( name + ".inc" ), name, file.target, conf.static_c, conf.dynamic_c, conf.skip, isCSGO );
+		Parser::WriteInclude( g_pOutputPath / "include"sv / ( name + ".inc" ), name, file.target, conf.static_c, conf.dynamic_c, conf.skip, isCSGO );
 		conf.name = std::move( name );
 		conf.crc32 = crc;
 		conf.target = file.target;
@@ -1435,16 +1436,6 @@ static void WriteStats( bool skipWarnings )
 	std::cout << "\r"sv << clr::green << FormatTime( duration_cast<chrono::seconds>( end - g_flStartTime ).count() ) << clr::reset << " elapsed"sv << std::endl;
 }
 
-static constexpr const char* const validTypes[] =
-{
-	"vs", "ps", "gs", "ds", "hs"
-};
-
-static constexpr const char* const validModels[] =
-{
-	"20b", "30", "40", "41", "50", "51"
-};
-
 int main( int argc, const char* argv[] )
 {
 	{
@@ -1458,54 +1449,31 @@ int main( int argc, const char* argv[] )
 		SetConsoleCtrlHandler( CtrlHandler, true );
 	}
 
-	bool parseLegacy = false;
-	for ( int i = 1; i < argc; i++ )
-	{
-		if ( !_stricmp (argv[i], "-nompi"  ) || !_stricmp(argv[i], "-nop4" ) )
-		{
-			parseLegacy = true;
-			break;
-		}
-	}
-
 	ez::ezOptionParser cmdLine{};
 	cmdLine.overview = "Source shader compiler.";
-	cmdLine.syntax   = "ShaderCompile [OPTIONS] file1.fxc [file2.fxc...]";
-	if ( parseLegacy )
-	{
-		cmdLine.add( "", true, 1, 0, "", "-game" );
-		cmdLine.add( "", true, 1, 0, "", "-shaderpath" );
-		cmdLine.add( "0", false, 1, 0, "", "-threads" );
-		cmdLine.add( "", false, 0, 0, "", "-nompi" );
-		cmdLine.add( "", false, 0, 0, "", "-nop4" );
-		cmdLine.add( "", false, 0, 0, "", "-allowdebug" );
-		cmdLine.add( "", false, 0, 0, "", "-types" );
-		cmdLine.add( "", false, 0, 0, "", "-ver" );
-	}
-	else
-	{
-		cmdLine.add( "", true, -1, ',', "Sets shader version", "-ver", "/ver", new ez::ezOptionValidator{ ez::ezOptionValidator::T, ez::ezOptionValidator::IN, validModels, std::size( validModels ), false } );
-		cmdLine.add( "", true, 1, 0, "Base path for shaders", "-shaderpath", "/shaderpath" );
-		cmdLine.add( "", false, 0, 0, "Skip crc check during compilation", "-force", "/force" );
-		cmdLine.add( "", false, 0, 0, "Calculate crc for shader", "-crc", "/crc" );
-		cmdLine.add( "", false, 0, 0, "Generate only header", "-dynamic", "/dynamic" );
-		cmdLine.add( "", false, 0, 0, "Stop on first error", "-fastfail", "/fastfail" );
-		cmdLine.add( "0", false, 1, 0, "Number of threads used, defaults to core count", "-threads", "/threads" );
-		cmdLine.add( "", false, 0, 0, "Shows help", "-help", "-h", "/help", "/h" );
+	cmdLine.syntax   = "ShaderCompile [OPTIONS] -shaderpath dir";
+	cmdLine.add( "", true, 1, 0, "Base path for shaders, must contain shaders.toml", "-shaderpath", "/shaderpath" );
+	cmdLine.add( "", false, -1, ',', "Compile only these groups from shaders.toml, values can be separated by ','", "-group", "/group" );
+	cmdLine.add( "", false, 1, 0, "Copy compiled shaders of selected groups to game directory", "-game", "/game" );
+	cmdLine.add( "", false, 1, 0, "Directory for include and shaders/fxc output, defaults to shader path", "-output", "/output" );
+	cmdLine.add( "", false, 0, 0, "Skip crc check during compilation", "-force", "/force" );
+	cmdLine.add( "", false, 0, 0, "Calculate crc for shader", "-crc", "/crc" );
+	cmdLine.add( "", false, 0, 0, "Generate only header", "-dynamic", "/dynamic" );
+	cmdLine.add( "", false, 0, 0, "Stop on first error", "-fastfail", "/fastfail" );
+	cmdLine.add( "0", false, 1, 0, "Number of threads used, defaults to core count", "-threads", "/threads" );
+	cmdLine.add( "", false, 0, 0, "Shows help", "-help", "-h", "/help", "/h" );
 
-		cmdLine.add( "", false, 0, 0, "Verbose file cache and final shader info", "-verbose", "/verbose" );
-		cmdLine.add( "", false, 0, 0, "Verbose compile commands", "-verbose2", "/verbose2" );
-		cmdLine.add( "", false, 0, 0, "Enables preprocessor debug printing", "-verbose_preprocessor" );
+	cmdLine.add( "", false, 0, 0, "Verbose file cache and final shader info", "-verbose", "/verbose" );
+	cmdLine.add( "", false, 0, 0, "Verbose compile commands", "-verbose2", "/verbose2" );
+	cmdLine.add( "", false, 0, 0, "Enables preprocessor debug printing", "-verbose_preprocessor" );
 
-		cmdLine.add( "", false, 0, 0, "Skips shader validation", "/Vd", "-no-validation" );
-		cmdLine.add( "", false, 0, 0, "Directs the compiler to not use flow-control constructs where possible", "/Gfa", "-no-flow-control" );
-		cmdLine.add( "", false, 0, 0, "Directs the compiler to use flow-control constructs where possible", "/Gfp", "-prefer-flow-control" );
-		cmdLine.add( "", false, 0, 0, "Disables shader optimization", "/Od", "-disable-optimization" );
-		cmdLine.add( "", false, 0, 0, "Enable debugging information", "/Zi", "-debug-info" );
-		cmdLine.add( "1", false, 1, 0, "Set optimization level (0-3)", "/O", "-optimize" );
-		cmdLine.add( "", false, -1, ',', "Set shader type, if compiling multiple different shaders, values can be separated by ','", "/T", "-types", new ez::ezOptionValidator{ ez::ezOptionValidator::T, ez::ezOptionValidator::IN, validTypes, std::size( validTypes ), false } );
-		cmdLine.add( "", false, 0, 0, "Generate ShaderComboSemantics_t and friends for shader", "-csgo", "/csgo" );
-	}
+	cmdLine.add( "", false, 0, 0, "Skips shader validation", "/Vd", "-no-validation" );
+	cmdLine.add( "", false, 0, 0, "Directs the compiler to not use flow-control constructs where possible", "/Gfa", "-no-flow-control" );
+	cmdLine.add( "", false, 0, 0, "Directs the compiler to use flow-control constructs where possible", "/Gfp", "-prefer-flow-control" );
+	cmdLine.add( "", false, 0, 0, "Disables shader optimization", "/Od", "-disable-optimization" );
+	cmdLine.add( "", false, 0, 0, "Enable debugging information", "/Zi", "-debug-info" );
+	cmdLine.add( "1", false, 1, 0, "Set optimization level (0-3)", "/O", "-optimize" );
+	cmdLine.add( "", false, 0, 0, "Generate ShaderComboSemantics_t and friends for shader", "-csgo", "/csgo" );
 
 	cmdLine.parse( argc, argv );
 
@@ -1538,8 +1506,7 @@ int main( int argc, const char* argv[] )
 		flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_DEBUG_NAME_FOR_SOURCE;
 
 	int optLevel = 1;
-	if ( !parseLegacy )
-		cmdLine.get( "/O" )->getInt( optLevel );
+	cmdLine.get( "/O" )->getInt( optLevel );
 	switch ( optLevel )
 	{
 	case 0:
@@ -1559,7 +1526,7 @@ int main( int argc, const char* argv[] )
 		break;
 	}
 
-	if ( std::vector<std::string> badOptions; !cmdLine.gotRequired( badOptions ) || ( !parseLegacy && cmdLine.lastArgs.size() < 1 ) )
+	if ( std::vector<std::string> badOptions; !cmdLine.gotRequired( badOptions ) )
 	{
 		std::cout << clr::red << clr::bold << "ERROR: Missing argument"sv << ( badOptions.size() == 1 ? ": "sv : "s:\n"sv ) << clr::reset;
 		for ( const auto& option : badOptions )
@@ -1585,108 +1552,46 @@ int main( int argc, const char* argv[] )
 		return -1;
 	}
 
-	auto targets = cmdLine.get( "-types" );
-	auto versions = cmdLine.get( "-ver" );
-	if ( parseLegacy )
-		/*skip*/;
-	else if ( auto s = versions->args[0]->size(); s != 1 && s != cmdLine.lastArgs.size() )
-	{
-		std::cout << clr::red << clr::bold << "ERROR: Argument count for -ver doesn't match input shader count"sv << clr::reset;
-		return -1;
-	}
-
-	if ( auto s = targets->args.empty() ? 0 : targets->args[0]->size(); s > 1 && s != cmdLine.lastArgs.size() )
-	{
-		std::cout << clr::red << clr::bold << "ERROR: Argument count for -types doesn't match input shader count"sv << clr::reset;
-		return -1;
-	}
-
 	std::string path;
 	cmdLine.get( "-shaderpath" )->getString( path );
 	g_pShaderPath = fs::absolute( std::move( path ) );
 
-	if ( parseLegacy )
+	g_pOutputPath = g_pShaderPath;
+	if ( cmdLine.isSet( "-output" ) )
 	{
-		auto fileList = g_pShaderPath / "filelist.txt"sv;
-		if ( !fs::exists( fileList ) )
-		{
-			std::cout << clr::red << "Couldn't find filelist.txt in \""sv << g_pShaderPath << "\"!"sv << clr::reset << std::endl;
-			return -1;
-		}
+		cmdLine.get( "-output" )->getString( path );
+		g_pOutputPath = fs::absolute( std::move( path ) );
+	}
 
-		struct hasher : std::hash<std::string_view>
-		{
-			using is_transparent = int;
-		};
-		struct equaler : std::equal_to<std::string_view>
-		{
-			using is_transparent = int;
-		};
+	std::vector<std::string> groups;
+	{
+		std::vector<std::vector<std::string>> groupArgs;
+		cmdLine.get( "-group" )->getMultiStrings( groupArgs );
+		for ( auto& args : groupArgs )
+			groups.insert( groups.end(), args.begin(), args.end() );
+	}
 
-		std::unordered_multimap<std::string, std::string, hasher, equaler> files;
+	const auto shaders = ShaderList::Load( g_pShaderPath, groups );
+	if ( !shaders )
+		return -1;
 
-		{
-			std::ifstream list( fileList );
-			std::string line, line2;
-			while ( std::getline( list, line ) )
-			{
-				if ( !line.starts_with( "#BEGIN "sv ) )
-					continue;
-				std::getline( list, line2 );
-				bool is30 = line.ends_with( "30"sv );
-				files.emplace( std::move( line2 ), line.substr( line.length() - ( is30 ? 2 : 3 ), is30 ? 2 : 3 ) );
-			}
-		}
-
-		robin_hood::unordered_set<std::string_view> unique;
-		for ( auto&& f : files )
-			unique.emplace( f.first );
-
-		// fake arguments
-		versions->args.emplace_back( new std::vector<std::string*> );
-		for ( auto&& f : unique )
-		{
-			robin_hood::unordered_set<std::string_view> added;
-			auto it = files.equal_range( f );
-			for ( auto s = it.first; s != it.second; ++s )
-			{
-				if ( !added.emplace( s->second ).second )
-					continue;
-				cmdLine.lastArgs.emplace_back( new std::string( s->first ) );
-				versions->args[0]->emplace_back( new std::string( s->second ) );
-			}
-		}
-
-		if ( cmdLine.lastArgs.empty() )
-		{
-			std::cout << clr::red << "filelist.txt doesn't contain any shaders!"sv << clr::reset << std::endl;
-			return -1;
-		}
+	if ( shaders->empty() )
+	{
+		std::cout << "Nothing to compile"sv << std::endl;
+		return 0;
 	}
 
 	std::set<ShaderInputData> files;
-	const bool noTargets = targets->args.empty() || targets->args[0]->empty();
-	for ( size_t i = 0, c = cmdLine.lastArgs.size(); i < c; ++i )
-	{
-		std::string_view version = versions->args[0]->size() == 1 ? *versions->args[0]->at( 0 ) : *versions->args[0]->at( i );
-		std::string_view target;
-		if ( noTargets )
-			target = Parser::GetTarget( *cmdLine.lastArgs[i] );
-		else
-			target = targets->args[0]->size() == 1 ? *targets->args[0]->at( 0 ) : *targets->args[0]->at( i );
-		if ( version == "20b"sv && target == "vs"sv )
-			version = "20"sv;
-		files.insert( ShaderInputData{ fs::path( *cmdLine.lastArgs[i] ).filename().string(), version, target } );
-	}
+	for ( const auto& shader : *shaders )
+		files.insert( ShaderInputData{ shader.path, shader.version, shader.target } );
 
 	if ( cmdLine.isSet( "-crc" ) )
 	{
-		const auto root = g_pShaderPath.string();
 		for ( const auto& file : files )
 		{
 			const std::string name = Parser::ConstructName( file.name, file.target, file.version );
 			uint32_t crc = 0;
-			Parser::CheckCrc( g_pShaderPath / file.name, root, name, crc );
+			Parser::CheckCrc( file.name, g_pShaderPath, g_pOutputPath, name, crc );
 			std::cout << crc << std::endl;
 		}
 		return 0;
@@ -1696,17 +1601,16 @@ int main( int argc, const char* argv[] )
 	if ( cmdLine.isSet( "-dynamic" ) )
 	{
 		bool failed = false;
-		const auto root = g_pShaderPath.string();
 		for ( const auto& file : files )
 		{
 			CfgProcessor::ShaderConfig conf;
-			if ( !Parser::ParseFile( g_pShaderPath / file.name, root, file.target, file.version, conf ) )
+			if ( !Parser::ParseFile( file.name, g_pShaderPath, file.target, file.version, conf ) )
 			{
 				std::cout << clr::red << "Failed to parse "sv << file.name << clr::reset << std::endl;
 				failed = true;
 			}
 			const std::string name = Parser::ConstructName( file.name, file.target, file.version );
-			Parser::WriteInclude( g_pShaderPath / "include"sv / ( name + ".inc" ), name, file.target, conf.static_c, conf.dynamic_c, conf.skip, isCSGO );
+			Parser::WriteInclude( g_pOutputPath / "include"sv / ( name + ".inc" ), name, file.target, conf.static_c, conf.dynamic_c, conf.skip, isCSGO );
 		}
 		return failed ? -1 : 0;
 	}
@@ -1725,12 +1629,12 @@ int main( int argc, const char* argv[] )
 	cmdLine.get( "-threads" )->getULong( threads );
 	CompileShaders( std::move( entries ), threads ? threads : std::thread::hardware_concurrency(), flags );
 
-	WriteStats( parseLegacy );
+	WriteStats( false );
 
-	if ( parseLegacy )
+	if ( cmdLine.isSet( "-game" ) )
 	{
 		cmdLine.get( "-game" )->getString( path );
-		fs::path src = g_pShaderPath / "shaders"sv / "fxc"sv;
+		fs::path src = g_pOutputPath / "shaders"sv / "fxc"sv;
 		fs::path game = fs::absolute( std::move( path ) ) / "shaders"sv / "fxc"sv;
 		std::error_code c;
 		fs::create_directories( game, c );

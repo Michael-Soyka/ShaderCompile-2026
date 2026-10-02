@@ -15,6 +15,7 @@
 
 #include "shaderparser.h"
 #include "cfgprocessor.h"
+#include "includepath.h"
 #include "termcolor/style.hpp"
 #include "termcolors.hpp"
 #include "re2/re2.h"
@@ -65,10 +66,11 @@ Parser::Combo::Combo( const std::string& name, int32_t min, int32_t max, const s
 
 std::string Parser::ConstructName( const std::string& baseName, const std::string_view& target, const std::string_view& ver )
 {
+	const std::string fileName = fs::path( baseName ).filename().string();
 	std::string name;
-	if ( re2::RE2::PartialMatch( baseName, r::base_name, &name ) )
+	if ( re2::RE2::PartialMatch( fileName, r::base_name, &name ) )
 		return name + "_"s + std::string( target ) + std::string( ver );
-	return fs::path( baseName ).stem().string() + "_"s + std::string( target ) + std::string( ver );
+	return fs::path( fileName ).stem().string() + "_"s + std::string( target ) + std::string( ver );
 }
 
 std::string_view Parser::GetTarget( const std::string& baseName )
@@ -79,25 +81,20 @@ std::string_view Parser::GetTarget( const std::string& baseName )
 }
 
 template <typename T>
-static bool ReadFile( const fs::path& name, const std::string& srcPath, std::vector<std::string>& includes, T& func )
+static bool ReadFile( const fs::path& root, const std::string& key, std::vector<std::string>& includes, T& func )
 {
-	const auto fullPath = fs::absolute( name );
-	const auto parent = fullPath.parent_path();
-	if ( parent.string().size() < srcPath.size() )
+	includes.emplace_back( key );
+	std::ifstream file( root / key );
+	if ( file.fail() )
 	{
-		std::cout << clr::red << "Leaving root directory!"sv << clr::reset << std::endl;
+		std::cout << clr::red << "File \""sv << key << "\" does not exist"sv << clr::reset << std::endl;
 		return false;
 	}
 
-	auto rawName = fullPath.string().substr( srcPath.size() + 1 );
-	std::for_each( rawName.begin(), rawName.end(), []( char& c ) { if ( c == '\\' ) c = '/'; } );
-	includes.emplace_back( rawName );
-	std::ifstream file( fullPath );
-	if ( file.fail() )
+	const auto exists = [&root]( const std::string& candidate )
 	{
-		std::cout << clr::red << "File \""sv << rawName << "\" does not exist"sv << clr::reset << std::endl;
-		return false;
-	}
+		return fs::is_regular_file( root / candidate );
+	};
 
 	bool cComment = false;
 	for ( std::string line, reducedLine, incl, c1, c2; std::getline( file, line ); )
@@ -123,14 +120,21 @@ static bool ReadFile( const fs::path& name, const std::string& srcPath, std::vec
 		re2::RE2::FullMatch( line, r::cpp_comment, &reducedLine );
 		if ( re2::RE2::PartialMatch( reducedLine.empty() ? line : reducedLine, r::inc, &incl ) && !( reducedLine.empty() ? line : reducedLine ).starts_with( "//"sv ) )
 		{
-			if ( V_IsAbsolutePath( incl.c_str() ) )
+			reducedLine.clear();
+			const auto resolved = IncludePath::Resolve( key, incl, exists );
+			if ( resolved.status == IncludePath::Status::OutsideRoot )
 			{
-				std::cout << clr::red << "Absolute path \""sv << incl << "\" in #include, aborting!"sv << clr::reset << std::endl;
+				std::cout << clr::red << "Include \""sv << incl << "\" in \""sv << key << "\" is absolute or leaves shader directory, aborting!"sv << clr::reset << std::endl;
 				return false;
 			}
+			if ( resolved.status == IncludePath::Status::NotFound )
+			{
+				std::cout << clr::red << "File \""sv << incl << "\" included from \""sv << key << "\" does not exist"sv << clr::reset << std::endl;
+				continue;
+			}
 
-			reducedLine.clear();
-			ReadFile( parent / incl, srcPath, includes, func );
+			if ( !ReadFile( root, resolved.key, includes, func ) )
+				return false;
 			continue;
 		}
 		reducedLine.clear();
@@ -138,19 +142,17 @@ static bool ReadFile( const fs::path& name, const std::string& srcPath, std::vec
 	}
 
 	if ( cComment )
-		std::cout << clr::red << "Unexpected end of  \""sv << rawName << clr::reset << std::endl;
+		std::cout << clr::red << "Unexpected end of  \""sv << key << clr::reset << std::endl;
 
 	return !cComment;
 }
 
 static constexpr const char validL[] = { 'v', 'p', 'g', 'h', 'd' };
 static constexpr const char validU[] = { 'V', 'P', 'G', 'H', 'D' };
-bool Parser::ParseFile( const fs::path& name, const std::string& root, const std::string_view& target, const std::string_view& version, CfgProcessor::ShaderConfig& conf )
+bool Parser::ParseFile( const std::string& key, const fs::path& root, const std::string_view& target, const std::string_view& version, CfgProcessor::ShaderConfig& conf )
 {
 	using re2::RE2;
 	conf.centroid_mask = 0U;
-	const auto nameS = name.string();
-	const auto f = nameS.find_last_of( '.' );
 	char regMatch[] = { R"reg(\[ s(\d+\w?)\])reg" };
 	char regNotMatch[] = { R"reg(\[[    ]s\d+\w?\])reg" };
 	std::string mainCat = " S_MAIN"s;
@@ -227,7 +229,7 @@ bool Parser::ParseFile( const fs::path& name, const std::string& root, const std
 		}
 	};
 
-	return ReadFile( name, root, conf.includes, read );
+	return ReadFile( root, key, conf.includes, read );
 }
 
 void Parser::WriteInclude( const fs::path& fileName, const std::string& name, const std::string_view& target, const std::vector<Combo>& static_c,
@@ -319,12 +321,12 @@ void Parser::WriteInclude( const fs::path& fileName, const std::string& name, co
 
 		file << "#pragma once\n" R"(#include "shaderlib/cshader.h")" "\n"sv;
 
-		writeVars( "Static"sv, static_c, "IShaderShadow* pShaderShadow, IMaterialVar** params"sv,
+		writeVars( "Static"sv, static_c, "IShaderShadow* pShaderShadow = nullptr, IMaterialVar** params = nullptr"sv,
 			std::accumulate( dynamic_c.begin(), dynamic_c.end(), 1U, []( uint32_t a, const Combo& b ) { return a * ( b.maxVal - b.minVal + 1 ); } ), false );
 
 		file << "\n"sv;
 
-		writeVars( "Dynamic"sv, dynamic_c, "IShaderDynamicAPI* pShaderAPI"sv, 1U, true );
+		writeVars( "Dynamic"sv, dynamic_c, "IShaderDynamicAPI* pShaderAPI = nullptr"sv, 1U, true );
 
 		if ( writeSCI )
 		{
@@ -365,11 +367,11 @@ void Parser::WriteInclude( const fs::path& fileName, const std::string& name, co
 	fs::permissions( fileName, fs::perms::owner_read );
 }
 
-bool Parser::CheckCrc( const fs::path& sourceFile, const std::string& root, const std::string& name, uint32_t& crc32 )
+bool Parser::CheckCrc( const std::string& key, const fs::path& root, const fs::path& output, const std::string& name, uint32_t& crc32 )
 {
 	uint32_t binCrc = 0;
 	{
-		const auto filePath = sourceFile.parent_path() / "shaders"sv / "fxc"sv / ( name + ".vcs" );
+		const auto filePath = output / "shaders"sv / "fxc"sv / ( name + ".vcs" );
 		std::ifstream file( filePath, std::ios::binary );
 		if ( file )
 		{
@@ -384,7 +386,7 @@ bool Parser::CheckCrc( const fs::path& sourceFile, const std::string& root, cons
 	{
 		file += line + "\n";
 	};
-	if ( !ReadFile( sourceFile, root, includes, read ) )
+	if ( !ReadFile( root, key, includes, read ) )
 		return false;
 
 	crc32 = CRC32::ProcessSingleBuffer( file.c_str(), file.size() );

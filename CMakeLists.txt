@@ -10,6 +10,7 @@ option(RE2_BUILD_TESTING "" OFF)
 
 add_subdirectory(shared/re2)
 add_subdirectory(shared/gsl)
+add_subdirectory(shared/tomlplusplus)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -18,13 +19,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(SRC
     ShaderCompile/cfgprocessor.cpp
     ShaderCompile/d3dxfxc.cpp
+    ShaderCompile/includepath.cpp
     ShaderCompile/ShaderCompile.cpp
+    ShaderCompile/shaderlist.cpp
     ShaderCompile/shaderparser.cpp
     ShaderCompile/utlbuffer.cpp
     )
 
 add_executable(ShaderCompile ${SRC})
-target_link_libraries(ShaderCompile PRIVATE re2::re2 Microsoft.GSL::GSL)
+set_target_properties(ShaderCompile PROPERTIES OUTPUT_NAME ShaderCompile26)
+target_link_libraries(ShaderCompile PRIVATE re2::re2 Microsoft.GSL::GSL tomlplusplus::tomlplusplus)
 include_directories(ShaderCompile/include shared/re2)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:__cplusplus")
