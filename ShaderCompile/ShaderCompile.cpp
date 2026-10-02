@@ -90,6 +90,7 @@ using namespace std::literals;
 
 using Clock = chrono::high_resolution_clock;
 static fs::path g_pShaderPath;
+static fs::path g_pOutputPath;
 static Clock::time_point g_flStartTime;
 static bool g_bVerbose	= false;
 static bool g_bVerbose2 = false;
@@ -450,7 +451,7 @@ static void OutputDynamicCombo( size_t& pnTotalFlushedSize, CUtlBuffer& pDynamic
 
 static fs::path GetVCSFilenames( const ShaderInfo_t& si )
 {
-	auto path = g_pShaderPath / "shaders"sv / "fxc"sv;
+	auto path = g_pOutputPath / "shaders"sv / "fxc"sv;
 
 	fs::directory_entry status( path );
 	if ( !status.exists() )
@@ -1190,7 +1191,7 @@ static std::unique_ptr<CfgProcessor::CfgEntryInfo[]> Shared_ParseListOfCompileCo
 	{
 		uint32_t crc;
 		std::string name = Parser::ConstructName( file.name, file.target, file.version );
-		if ( Parser::CheckCrc( file.name, g_pShaderPath, name, crc ) && !bForce )
+		if ( Parser::CheckCrc( file.name, g_pShaderPath, g_pOutputPath, name, crc ) && !bForce )
 			continue;
 
 		CfgProcessor::ShaderConfig conf;
@@ -1200,7 +1201,7 @@ static std::unique_ptr<CfgProcessor::CfgEntryInfo[]> Shared_ParseListOfCompileCo
 			failed = true;
 			continue;
 		}
-		Parser::WriteInclude( g_pShaderPath / "include"sv / ( name + ".inc" ), name, file.target, conf.static_c, conf.dynamic_c, conf.skip, isCSGO );
+		Parser::WriteInclude( g_pOutputPath / "include"sv / ( name + ".inc" ), name, file.target, conf.static_c, conf.dynamic_c, conf.skip, isCSGO );
 		conf.name = std::move( name );
 		conf.crc32 = crc;
 		conf.target = file.target;
@@ -1454,6 +1455,7 @@ int main( int argc, const char* argv[] )
 	cmdLine.add( "", true, 1, 0, "Base path for shaders, must contain shaders.toml", "-shaderpath", "/shaderpath" );
 	cmdLine.add( "", false, -1, ',', "Compile only these groups from shaders.toml, values can be separated by ','", "-group", "/group" );
 	cmdLine.add( "", false, 1, 0, "Copy compiled shaders of selected groups to game directory", "-game", "/game" );
+	cmdLine.add( "", false, 1, 0, "Directory for include and shaders/fxc output, defaults to shader path", "-output", "/output" );
 	cmdLine.add( "", false, 0, 0, "Skip crc check during compilation", "-force", "/force" );
 	cmdLine.add( "", false, 0, 0, "Calculate crc for shader", "-crc", "/crc" );
 	cmdLine.add( "", false, 0, 0, "Generate only header", "-dynamic", "/dynamic" );
@@ -1554,6 +1556,13 @@ int main( int argc, const char* argv[] )
 	cmdLine.get( "-shaderpath" )->getString( path );
 	g_pShaderPath = fs::absolute( std::move( path ) );
 
+	g_pOutputPath = g_pShaderPath;
+	if ( cmdLine.isSet( "-output" ) )
+	{
+		cmdLine.get( "-output" )->getString( path );
+		g_pOutputPath = fs::absolute( std::move( path ) );
+	}
+
 	std::vector<std::string> groups;
 	{
 		std::vector<std::vector<std::string>> groupArgs;
@@ -1582,7 +1591,7 @@ int main( int argc, const char* argv[] )
 		{
 			const std::string name = Parser::ConstructName( file.name, file.target, file.version );
 			uint32_t crc = 0;
-			Parser::CheckCrc( file.name, g_pShaderPath, name, crc );
+			Parser::CheckCrc( file.name, g_pShaderPath, g_pOutputPath, name, crc );
 			std::cout << crc << std::endl;
 		}
 		return 0;
@@ -1601,7 +1610,7 @@ int main( int argc, const char* argv[] )
 				failed = true;
 			}
 			const std::string name = Parser::ConstructName( file.name, file.target, file.version );
-			Parser::WriteInclude( g_pShaderPath / "include"sv / ( name + ".inc" ), name, file.target, conf.static_c, conf.dynamic_c, conf.skip, isCSGO );
+			Parser::WriteInclude( g_pOutputPath / "include"sv / ( name + ".inc" ), name, file.target, conf.static_c, conf.dynamic_c, conf.skip, isCSGO );
 		}
 		return failed ? -1 : 0;
 	}
@@ -1625,7 +1634,7 @@ int main( int argc, const char* argv[] )
 	if ( cmdLine.isSet( "-game" ) )
 	{
 		cmdLine.get( "-game" )->getString( path );
-		fs::path src = g_pShaderPath / "shaders"sv / "fxc"sv;
+		fs::path src = g_pOutputPath / "shaders"sv / "fxc"sv;
 		fs::path game = fs::absolute( std::move( path ) ) / "shaders"sv / "fxc"sv;
 		std::error_code c;
 		fs::create_directories( game, c );

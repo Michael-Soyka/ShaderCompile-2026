@@ -367,11 +367,11 @@ void Parser::WriteInclude( const fs::path& fileName, const std::string& name, co
 	fs::permissions( fileName, fs::perms::owner_read );
 }
 
-bool Parser::CheckCrc( const std::string& key, const fs::path& root, const std::string& name, uint32_t& crc32 )
+bool Parser::CheckCrc( const std::string& key, const fs::path& root, const fs::path& output, const std::string& name, uint32_t& crc32 )
 {
 	uint32_t binCrc = 0;
 	{
-		const auto filePath = root / "shaders"sv / "fxc"sv / ( name + ".vcs" );
+		const auto filePath = output / "shaders"sv / "fxc"sv / ( name + ".vcs" );
 		std::ifstream file( filePath, std::ios::binary );
 		if ( file )
 		{

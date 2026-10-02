@@ -18,6 +18,7 @@ Without `-group` all groups are compiled.
 -shaderpath ARG                Base path for shaders, must contain shaders.toml, required
 -group ARG                     Compile only these groups from shaders.toml
 -game ARG                      Copy compiled shaders of selected groups to game directory
+-output ARG                    Directory for include and shaders/fxc output, defaults to -shaderpath
 -crc                           Calculate crc for shader
 -dynamic                       Generate only header
 -force                         Skip crc check during compilation
