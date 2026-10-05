@@ -6,8 +6,7 @@ Standalone shadercompile, that doesn't depend on valve libraries and supports x6
 <img width="1080" height="575" alt="665325095-e12b26c2-7d12-4ac5-ba94-285462d2e6a9" src="https://github.com/user-attachments/assets/3313d8be-7625-4775-adbd-5803e6c6f5a9" />
 <p align="center">ShaderCompile26 TUI with 6 workers</p>
 
-All the credit for this codebase goes to SCell555!
-https://github.com/SCell555/ShaderCompile
+All the credit for this codebase for this modification goes to SCell555! *https://github.com/SCell555/ShaderCompile*
 
 ## Usage
 
@@ -83,8 +82,6 @@ The TUI can be turned off by `-noui`, `-verbose`, `-verbose2` flags, redirected 
 
 Supported versions: `30`, `40`, `41`, `50`, `51`.
 
-Minimum shader model is 3.0.
-
 Version from file name suffix:
 
 | Suffix             | Version |
@@ -96,40 +93,4 @@ Version from file name suffix:
 
 ## Getting started
 
-This assumes you have "clean" Source SDK2013 project.
-
-1. In `game_shader_dx9_base.vpc` replace `$AdditionalIncludeDirectories	"$BASE;fxctmp9;vshtmp9;"`
-
- with `$AdditionalIncludeDirectories	"$BASE;include"` , shader headers will be now located in more sensible place
-
-2. Replace `cshader.h` in public/shaderlib with one from this repo, if you are using VS2013 compiler use the one from
-
-VS2013 folder
-
-3. Place `ShaderCompile26.exe` and `process_shaders.ps1` to devtools/bin folder where `vpc.exe` is located
-4. Replace `buildshaders.bat` with one from this repo
-5. Put `shaders.toml` into the shader source folder instead of `<project>.txt` lists, and in `buildsdkshaders.bat`
-
- pass a group name (or nothing to build every group) instead of the project name, without `-dx9_30` and `-force30`, so
-```batch
-%BUILD_SHADER% stdshader_dx9_30 -game %GAMEDIR% -source %SOURCEDIR% -dx9_30 -force30 
-```
-looks like
-```batch
-%BUILD_SHADER% -game %GAMEDIR% -source %SOURCEDIR%
-```
-
-6. Optionally remove all perl scripts for compiling shaders from devtools/bin, as they will be never used again
-```
-buildshaderlist.pl
-checkshaderchecksums.pl
-copyshaderincfiles.pl
-copyshaders.pl
-fxc_prep.pl
-psh_prep.pl
-shaderinfo.pl
-uniqifylist.pl
-updateshaders.pl
-valve_perl_helpers.pl
-vsh_prep.pl
-```
+Soon...
