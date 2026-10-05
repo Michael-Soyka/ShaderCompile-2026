@@ -34,6 +34,8 @@ Without `-group` all groups are compiled.
 -dynamic                       Generate only header
 -force                         Skip crc check during compilation
 -threads ARG                   Number of threads used, defaults to core count
+-workers ARG                   Number of shaders compiled at once, defaults to 4
+-noui                          Plain progress output instead of the full screen display
 
 -h, -help                      Shows help
 -verbose                       Verbose file cache and final shader info
@@ -47,6 +49,20 @@ Without `-group` all groups are compiled.
 -partial-precision, /Gpp       Compiles shader with partial precission
 -no-validation, /Vd            Skips shader validation
 ```
+
+## Parallel build and progress display
+
+Up to `-workers` shaders are compiled at once. All `-threads` threads share one pool and take combos from the active shaders in turn, so a small shader or the tail of a big one does not leave cores idle. A finished shader is written to `.vcs` right away and the next one from the queue takes its place. `-workers 1` compiles shaders one by one.
+
+In a console the progress is shown full screen:
+
+- top: queue of all shaders, white compiled, yellow with warnings, red failed, green compiling, gray waiting;
+- middle: one line per worker with progress bar, remaining combos, combos per second and estimated time;
+- bottom: shader count, success / warning / error totals and elapsed time.
+
+After the build the console returns to the normal screen with a `<shader> compiled in <time>` line per shader, warnings and errors.
+
+The full screen display is turned off by `-noui`, `-verbose`, `-verbose2`, redirected output or a console smaller than 60x10. Then only the `compiled in` lines and the summary are printed.
 
 ## Shader model version support
 
