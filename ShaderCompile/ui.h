@@ -1,6 +1,7 @@
 #pragma once
 
 #include "progress.h"
+#include "tui.h"
 
 #include <atomic>
 #include <thread>
@@ -21,6 +22,7 @@ namespace Ui
 
 	private:
 		void Loop();
+		void DrawFrame( const Progress::Snapshot& snapshot, Tui::RateTracker& rates );
 		void PrintFinished( const Progress::Snapshot& snapshot );
 
 		const Progress::Model& m_model;
