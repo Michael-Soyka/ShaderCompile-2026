@@ -78,13 +78,13 @@ VS2013 folder
 4. Replace `buildshaders.bat` with one from this repo
 5. Put `shaders.toml` into the shader source folder instead of `<project>.txt` lists, and in `buildsdkshaders.bat`
 
- pass a group name (or `all`) instead of the project name, without `-dx9_30` and `-force30`, so
+ pass a group name (or nothing to build every group) instead of the project name, without `-dx9_30` and `-force30`, so
 ```batch
     %BUILD_SHADER% stdshader_dx9_30 -game %GAMEDIR% -source %SOURCEDIR% -dx9_30 -force30 
     ```
 looks like
 ```batch
-    %BUILD_SHADER% all -game %GAMEDIR% -source %SOURCEDIR%
+    %BUILD_SHADER% -game %GAMEDIR% -source %SOURCEDIR%
     ```
 
 6. Optionally remove all perl scripts for compiling shaders from devtools/bin, as they will be never used again

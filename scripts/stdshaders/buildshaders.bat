@@ -16,7 +16,7 @@ set tt_chkpt=%tt_start%
 
 
 REM ****************
-REM usage: buildshaders <group|all>
+REM usage: buildshaders [group] [-game gameDir -source sourceDir]
 REM ****************
 
 setlocal
@@ -27,10 +27,15 @@ set SrcDirBase=..\..
 set shaderDir=shaders
 set SDKArgs=-local
 
-if "%1" == "" goto usage
-set inputbase=%1
+set inputbase=
+set firstarg=%~1
+if not defined firstarg goto build_shaders
+if "%firstarg:~0,1%" == "-" goto check_mod_args
+set inputbase=%~1
+shift
 
-if /i "%2" == "-game" goto set_mod_args
+:check_mod_args
+if /i "%1" == "-game" goto set_mod_args
 goto build_shaders
 
 REM ****************
@@ -38,11 +43,11 @@ REM USAGE
 REM ****************
 :usage
 echo.
-echo "usage: buildshaders <group|all> [-game] [gameDir if -game was specified] [-source sourceDir]"
-echo "       group is a table name from shaders.toml, all builds every group."
+echo "usage: buildshaders [group] [-game] [gameDir if -game was specified] [-source sourceDir]"
+echo "       group is a table name from shaders.toml, without it every group is built."
 echo "       gameDir is where gameinfo.txt is (where it will store the compiled shaders)."
 echo "       sourceDir is where the source code is (where it will find scripts and compilers)."
-echo "ex   : buildshaders all"
+echo "ex   : buildshaders"
 echo "ex   : buildshaders lightmappedgeneric -game c:\steam\steamapps\sourcemods\mymod -source c:\mymod\src"
 goto :end
 
@@ -54,13 +59,13 @@ REM ****************
 if not exist "..\..\devtools\bin\ShaderCompile26.exe" goto NoShaderCompile
 set ChangeToDir=%SrcDirBase%\devtools\bin\
 
-if /i "%4" NEQ "-source" goto NoSourceDirSpecified
-set SrcDirBase=%~5
+if /i "%3" NEQ "-source" goto NoSourceDirSpecified
+set SrcDirBase=%~4
 
 REM ** use the -game parameter to tell us where to put the files
-set targetdir=%~3\shaders
+set targetdir=%~2\shaders
 
-if not exist "%~3\gameinfo.txt" goto InvalidGameDirectory
+if not exist "%~2\gameinfo.txt" goto InvalidGameDirectory
 
 if not exist "shaders.toml" goto InvalidInputFile
 
@@ -70,7 +75,7 @@ REM ****************
 REM ERRORS
 REM ****************
 :InvalidGameDirectory
-echo Error: "%~3" is not a valid game directory.
+echo Error: "%~2" is not a valid game directory.
 echo (The -game directory must have a gameinfo.txt file)
 goto end
 
@@ -102,14 +107,14 @@ if not exist %shaderDir% mkdir %shaderDir%
 if not exist %shaderDir%\fxc mkdir %shaderDir%\fxc
 REM Nuke some files that we will add to later.
 
-title %1
+title buildshaders %inputbase%
 
 echo Building inc files and worklist for %inputbase%...
 
 set DYNAMIC=
 if "%dynamic_shaders%" == "1" set DYNAMIC=-Dynamic
-set GROUPARG=-Group '%inputbase%'
-if /i "%inputbase%" == "all" set GROUPARG=
+set GROUPARG=
+if defined inputbase set GROUPARG=-Group '%inputbase%'
 powershell -NoLogo -ExecutionPolicy Bypass -Command "%SrcDirBase%\devtools\bin\process_shaders.ps1 %DYNAMIC% -ShaderPath '%CD%' %GROUPARG%"
 
 REM ****************
