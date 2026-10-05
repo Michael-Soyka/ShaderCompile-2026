@@ -20,6 +20,7 @@ set(SRC
     ShaderCompile/cfgprocessor.cpp
     ShaderCompile/d3dxfxc.cpp
     ShaderCompile/includepath.cpp
+    ShaderCompile/progress.cpp
     ShaderCompile/ShaderCompile.cpp
     ShaderCompile/shaderlist.cpp
     ShaderCompile/shaderparser.cpp
