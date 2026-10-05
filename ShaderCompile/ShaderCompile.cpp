@@ -49,6 +49,9 @@
 #include "strmanip.hpp"
 #include "shaderlist.h"
 #include "shaderparser.h"
+#include "progress.h"
+#include "ui.h"
+#include <condition_variable>
 
 extern "C" {
 #define _7ZIP_ST
@@ -449,9 +452,11 @@ static void OutputDynamicCombo( size_t& pnTotalFlushedSize, CUtlBuffer& pDynamic
 	pDynamicComboBuffer.Put( pComboCode, nComboSize );
 }
 
-static fs::path GetVCSFilenames( const ShaderInfo_t& si )
+static std::vector<std::string> g_DeferredMessages;
+
+static void EnsureVcsDirectory()
 {
-	auto path = g_pOutputPath / "shaders"sv / "fxc"sv;
+	const auto path = g_pOutputPath / "shaders"sv / "fxc"sv;
 
 	fs::directory_entry status( path );
 	if ( !status.exists() )
@@ -465,25 +470,30 @@ static fs::path GetVCSFilenames( const ShaderInfo_t& si )
 		else
 			std::cout << std::endl;
 	}
+}
 
+static fs::path GetVCSFilenames( const ShaderInfo_t& si )
+{
+	auto path = g_pOutputPath / "shaders"sv / "fxc"sv;
 	path /= si.m_pShaderName;
 	path += ".vcs"sv;
 
 	// Check status of vcs file...
-	status.assign( path );
+	fs::directory_entry status( path );
 	if ( status.exists() )
 	{
 		// The file exists, let's see if it's writable.
 		if ( ( status.status().permissions() & ( fs::perms::owner_read | fs::perms::owner_write ) ) != ( fs::perms::owner_read | fs::perms::owner_write ) )
 		{
 			// It isn't writable. . we'd better change its permissions (or check it out possibly)
-			std::cout << clr::pinkish << "Warning: making "sv << clr::red << path << clr::pinkish << " writable!"sv << clr::reset;
+			std::string message = "Warning: making " + path.string() + " writable!";
 			std::error_code c;
 			fs::permissions( status, fs::perms::owner_read | fs::perms::owner_write, c );
 			if ( c )
-				std::cout << clr::red << " Failed! "sv << c.message() << clr::reset << std::endl;
-			else
-				std::cout << std::endl;
+				message += " Failed! " + c.message();
+
+			std::lock_guard guard{ Threading::g_mtxMsgReport };
+			g_DeferredMessages.emplace_back( std::move( message ) );
 		}
 	}
 
@@ -514,18 +524,14 @@ static bool CompareComboIds( const StaticComboAuxInfo_t& pA, const StaticComboAu
 
 static void WriteShaderFiles( std::string_view pShaderName )
 {
-	if ( !g_ShaderWrittenToDisk.emplace( pShaderName ).second )
-		return;
+	bool bShaderFailed;
+	{
+		std::lock_guard guard{ Threading::g_mtxGlobal };
+		if ( !g_ShaderWrittenToDisk.emplace( pShaderName ).second )
+			return;
 
-	const bool bShaderFailed                = g_ShaderHadError.contains( pShaderName );
-	const char* const szShaderFileOperation = bShaderFailed ? "Removing failed" : "Writing";
-
-	static Clock::time_point lastTime = g_flStartTime;
-
-	//
-	// Progress indication
-	//
-	std::cout << "\r"sv << clr::escaped( lineRewind ) << szShaderFileOperation << " "sv << (bShaderFailed ? clr::red : clr::green) << pShaderName << clr::reset << "..."sv << endLine;
+		bShaderFailed = g_ShaderHadError.contains( pShaderName );
+	}
 
 	//
 	// Retrieve the data we are going to operate on
@@ -553,8 +559,6 @@ static void WriteShaderFiles( std::string_view pShaderName )
 	{
 		std::error_code c;
 		fs::remove( path, c );
-		std::cout << "\r"sv << clr::escaped( lineRewind ) << clr::red << pShaderName << clr::reset << " "sv << FormatTimeShort( duration_cast<chrono::seconds>( Clock::now() - lastTime ).count() ) << std::endl;
-		lastTime = Clock::now();
 		return;
 	}
 
@@ -686,9 +690,6 @@ static void WriteShaderFiles( std::string_view pShaderName )
 
 	// Finalize, free memory
 	delete pByteCodeArray;
-
-	std::cout << "\r"sv << clr::escaped( lineRewind ) << clr::green << pShaderName << clr::reset << " "sv << FormatTimeShort( duration_cast<chrono::seconds>( Clock::now() - lastTime ).count() ) << std::endl;
-	lastTime = Clock::now();
 }
 
 // Assemble a reply package to the master from the compiled bytecode
@@ -721,432 +722,15 @@ static size_t AssembleWorkerReplyPackage( const CfgProcessor::CfgEntryInfo* pEnt
 		FlushCombos( nBytesWritten, ubDynamicComboBuffer, pBuf );
 	}
 
-	// Time to limit amount of prints
-	static Clock::time_point s_fLastInfoTime;
-	static uint64_t s_nLastEntry = nComboOfEntry;
-	static CUtlMovingAverage<uint64_t, 60> s_averageProcess;
-	static std::string_view s_lastShader = pEntry->m_szName;
-	const Clock::time_point fCurTime = Clock::now();
-
+	if ( pStComboRec )
 	{
 		std::lock_guard guard{ Threading::g_mtxGlobal };
-		if ( pStComboRec )
-		{
-			CStaticCombo *pCombo = pByteCodeArray->FindByKey( nComboOfEntry );
-			pByteCodeArray->DeleteByKey( nComboOfEntry );
-			delete pCombo;
-		}
-		if ( duration_cast<chrono::seconds>( fCurTime - s_fLastInfoTime ).count() != 0 )
-		{
-			if ( s_lastShader.data() != pEntry->m_szName.data() )
-			{
-				s_averageProcess.Reset();
-				s_lastShader = pEntry->m_szName;
-				s_nLastEntry = nComboOfEntry;
-			}
-
-			s_averageProcess.PushValue( s_nLastEntry - nComboOfEntry );
-			s_nLastEntry = nComboOfEntry;
-			const auto avg = s_averageProcess.GetAverage();
-			std::cout << "\r"sv << clr::escaped( lineRewind ) << "Compiling "sv << ( g_ShaderHadError.contains( pEntry->m_szName ) ? clr::red : clr::green ) << pEntry->m_szName << clr::reset << " ["sv << clr::blue << PrettyPrint( nComboOfEntry ) << clr::reset << " remaining] "sv
-				<< FormatTimeShort( duration_cast<chrono::seconds>( fCurTime - g_flStartTime ).count() ) << " elapsed ("sv << clr::green2 << avg << clr::reset << " c/s, est. remaining "sv << FormatTimeShort( nComboOfEntry / std::max<uint64_t>( avg, 1 ) ) << ")"sv << endLine;
-			s_fLastInfoTime = fCurTime;
-		}
+		CStaticCombo* pCombo = pByteCodeArray->FindByKey( nComboOfEntry );
+		pByteCodeArray->DeleteByKey( nComboOfEntry );
+		delete pCombo;
 	}
 
 	return nBytesWritten;
-}
-
-template <typename TMutexType>
-class CWorkerAccumState
-{
-public:
-	explicit CWorkerAccumState( uint32_t iFlags ) noexcept
-		: m_iFirstCommand( 0 ), m_iNextCommand( 0 ), m_iEndCommand( 0 )
-		, m_iLastFinished( 0 ), m_hCombo( nullptr ), m_iFlags( iFlags ) {}
-
-	void RangeBegin( uint64_t iFirstCommand, uint64_t iEndCommand );
-	void RangeFinished();
-
-	void ExecuteCompileCommand( CfgProcessor::ComboHandle hCombo );
-	void HandleCommandResponse( CfgProcessor::ComboHandle hCombo, CmdSink::IResponse* pResponse );
-
-	void Run( uint32_t i )
-	{
-		m_arrSubProcessInfos.reserve( i );
-
-		std::vector<std::thread> threads;
-		threads.reserve( i );
-
-		while ( i-- > 0 )
-		{
-			++m_nActive;
-			threads.emplace_back( DoExecute, this );
-		}
-
-		constexpr const std::chrono::milliseconds sleepTime{ 250 };
-		while ( m_nActive )
-		{
-			_mm_pause();
-			std::this_thread::sleep_for( sleepTime );
-		}
-
-		std::for_each( threads.begin(), threads.end(), []( std::thread& t ) { if ( t.joinable() ) t.join(); } );
-		m_arrSubProcessInfos.clear();
-	}
-
-	void OnProcessST();
-
-	void Stop() noexcept
-	{
-		m_bBreak.store( true, std::memory_order_release );
-	}
-
-private:
-	std::atomic<bool>			m_bBreak;
-	std::atomic<int>			m_nActive;
-	TMutexType					m_Mutex;
-
-	static void DoExecute( CWorkerAccumState* pThis )
-	{
-		while ( pThis->OnProcess() )
-			continue;
-
-		--pThis->m_nActive;
-	}
-
-	std::vector<uint64_t>	m_arrSubProcessInfos;
-	uint64_t				m_iFirstCommand;
-	uint64_t				m_iNextCommand;
-	uint64_t				m_iEndCommand;
-
-	uint64_t				m_iLastFinished;
-
-	CfgProcessor::ComboHandle m_hCombo;
-
-	const uint32_t			m_iFlags;
-
-	bool OnProcess();
-	void TryToPackageData( uint64_t iCommandNumber );
-};
-
-template <typename TMutexType>
-void CWorkerAccumState<TMutexType>::RangeBegin( uint64_t iFirstCommand, uint64_t iEndCommand )
-{
-	m_iFirstCommand = iFirstCommand;
-	m_iNextCommand  = iFirstCommand;
-	m_iEndCommand   = iEndCommand;
-	m_iLastFinished = iFirstCommand;
-	m_hCombo        = nullptr;
-	CfgProcessor::Combo_GetNext( m_iNextCommand, m_hCombo, m_iEndCommand );
-}
-
-template <typename TMutexType>
-void CWorkerAccumState<TMutexType>::RangeFinished()
-{
-	// Finish packaging data
-	TryToPackageData( m_iEndCommand - 1 );
-}
-
-template <typename TMutexType>
-void CWorkerAccumState<TMutexType>::ExecuteCompileCommand( CfgProcessor::ComboHandle hCombo )
-{
-	CmdSink::IResponse* pResponse = nullptr;
-
-	if constexpr ( std::is_same_v<TMutexType, Threading::null_mutex> )
-	{
-		if ( g_bVerbose2 )
-		{
-			char chReadBuf[4096];
-			Combo_FormatCommandHumanReadable( hCombo, chReadBuf );
-			std::cout << "running: \""sv << clr::green << chReadBuf << clr::reset << "\""sv << endLine;
-		}
-	}
-
-	Compiler::ExecuteCommand( Combo_BuildCommand( hCombo ), pResponse, m_iFlags );
-
-	HandleCommandResponse( hCombo, pResponse );
-}
-
-static void StopCommandRange();
-
-template <typename TMutexType>
-void CWorkerAccumState<TMutexType>::HandleCommandResponse( CfgProcessor::ComboHandle hCombo, CmdSink::IResponse* pResponse )
-{
-	Assert( pResponse );
-
-	// Command info
-	const CfgProcessor::CfgEntryInfo* pEntryInfo = Combo_GetEntryInfo( hCombo );
-	const uint64_t iComboIndex                   = Combo_GetComboNum( hCombo );
-	const uint64_t iCommandNumber                = Combo_GetCommandNum( hCombo );
-
-	if ( pResponse->Succeeded() )
-	{
-		std::lock_guard guard{ Threading::g_mtxGlobal };
-		const uint64_t nStComboIdx = iComboIndex / pEntryInfo->m_numDynamicCombos;
-		const uint64_t nDyComboIdx = iComboIndex - ( nStComboIdx * pEntryInfo->m_numDynamicCombos );
-		StaticComboFromDictAdd( pEntryInfo->m_szName, nStComboIdx )->AddDynamicCombo( nDyComboIdx, pResponse->GetResultBuffer(), pResponse->GetResultBufferLen() );
-	}
-	else // Tell the master that this shader failed
-	{
-		std::lock_guard guard{ Threading::g_mtxGlobal };
-		ShaderHadErrorDispatchInt( pEntryInfo->m_szName );
-	}
-
-	// Process listing even if the shader succeeds for warnings
-	const char* szListing = pResponse->GetListing();
-	if ( szListing || !pResponse->Succeeded() )
-	{
-		char chUnreportedListing[0xFF];
-		if ( !szListing )
-		{
-			sprintf_s( chUnreportedListing, sizeof( chUnreportedListing ), "%s(0,0): error 0000: Compiler failed without error description. Command number %" PRIu64, pEntryInfo->m_szShaderFileName.data(), iCommandNumber );
-			szListing = chUnreportedListing;
-		}
-
-		char chBuffer[4096];
-		Combo_FormatCommandHumanReadable( hCombo, chBuffer );
-
-		ErrMsgDispatchMsgLine( chBuffer, szListing, pEntryInfo->m_szName );
-		if ( !pResponse->Succeeded() && g_bFastFail )
-			StopCommandRange();
-	}
-
-	pResponse->Release();
-
-	// Maybe zip things up
-	TryToPackageData( iCommandNumber );
-}
-
-template <typename TMutexType>
-void CWorkerAccumState<TMutexType>::TryToPackageData( uint64_t iCommandNumber )
-{
-	std::unique_lock guard{ m_Mutex };
-
-	uint64_t iFinishedByNow = iCommandNumber + 1;
-
-	// Check if somebody is running an earlier command
-	for ( const auto& iRunningCommand : m_arrSubProcessInfos )
-	{
-		if ( iRunningCommand < iCommandNumber )
-		{
-			iFinishedByNow = 0;
-			break;
-		}
-	}
-
-	const uint64_t iLastFinished = m_iLastFinished;
-	if ( iFinishedByNow > m_iLastFinished )
-	{
-		m_iLastFinished = iFinishedByNow;
-		guard.unlock();
-	}
-	else
-		return;
-
-	CfgProcessor::ComboHandle hChBegin = CfgProcessor::Combo_GetCombo( iLastFinished );
-	CfgProcessor::ComboHandle hChEnd   = CfgProcessor::Combo_GetCombo( iFinishedByNow );
-
-	Assert( hChBegin && hChEnd );
-
-	const CfgProcessor::CfgEntryInfo* pInfoBegin = Combo_GetEntryInfo( hChBegin );
-	const CfgProcessor::CfgEntryInfo* pInfoEnd   = Combo_GetEntryInfo( hChEnd );
-
-	uint64_t nComboBegin     = Combo_GetComboNum( hChBegin ) / pInfoBegin->m_numDynamicCombos;
-	const uint64_t nComboEnd = Combo_GetComboNum( hChEnd ) / pInfoEnd->m_numDynamicCombos;
-
-	for ( ; pInfoBegin && ( pInfoBegin->m_iCommandStart < pInfoEnd->m_iCommandStart || nComboBegin > nComboEnd ); )
-	{
-		// Zip this combo
-		CUtlBuffer mbPacked;
-		const size_t nPackedLength = AssembleWorkerReplyPackage( pInfoBegin, nComboBegin, mbPacked );
-
-		if ( nPackedLength )
-		{
-			// Packed buffer
-			uint8_t* pCodeBuffer;
-			{
-				std::lock_guard guard{ Threading::g_mtxGlobal };
-				pCodeBuffer = StaticComboFromDictAdd( pInfoBegin->m_szName, nComboBegin )->AllocPackedCodeBlock( nPackedLength );
-			}
-
-			if ( pCodeBuffer )
-			{
-				mbPacked.SeekGet( CUtlBuffer::SEEK_HEAD, 0 );
-				mbPacked.Get( pCodeBuffer, gsl::narrow<int>( nPackedLength ) );
-			}
-		}
-
-		// Next iteration
-		if ( !nComboBegin-- )
-		{
-			Combo_Free( hChBegin );
-			if ( ( hChBegin = CfgProcessor::Combo_GetCombo( pInfoBegin->m_iCommandEnd ) ) != nullptr )
-			{
-				pInfoBegin  = Combo_GetEntryInfo( hChBegin );
-				nComboBegin = pInfoBegin->m_numStaticCombos - 1;
-			}
-		}
-	}
-
-	Combo_Free( hChBegin );
-	Combo_Free( hChEnd );
-}
-
-template <typename TMutexType>
-bool CWorkerAccumState<TMutexType>::OnProcess()
-{
-	CfgProcessor::ComboHandle hThreadCombo;
-	uint64_t* iCurrentId;
-	{
-		std::lock_guard guard{ m_Mutex };
-		hThreadCombo = m_hCombo ? Combo_Alloc( m_hCombo ) : nullptr;
-		m_arrSubProcessInfos.resize( m_arrSubProcessInfos.size() + 1 );
-		iCurrentId = &m_arrSubProcessInfos.back();
-	}
-
-	uint64_t iThreadCommand = ~0ULL;
-
-	for ( ;; )
-	{
-		{
-			std::lock_guard guard{ m_Mutex };
-			if ( m_hCombo )
-			{
-				Combo_Assign( hThreadCombo, m_hCombo );
-				*iCurrentId = Combo_GetCommandNum( hThreadCombo );
-				Combo_GetNext( iThreadCommand, m_hCombo, m_iEndCommand );
-			}
-			else
-			{
-				Combo_Free( hThreadCombo );
-				iThreadCommand = ~0ULL;
-				*iCurrentId = ~0ULL;
-			}
-		}
-
-		if ( hThreadCombo && !m_bBreak.load( std::memory_order_acquire ) )
-			ExecuteCompileCommand( hThreadCombo );
-		else
-			break;
-	}
-
-	Combo_Free( hThreadCombo );
-	return false;
-}
-
-template <typename TMutexType>
-void CWorkerAccumState<TMutexType>::OnProcessST()
-{
-	while ( m_hCombo && !m_bBreak.load( std::memory_order_acquire ) )
-	{
-		ExecuteCompileCommand( m_hCombo );
-
-		Combo_GetNext( m_iNextCommand, m_hCombo, m_iEndCommand );
-	}
-}
-
-//
-// ProcessCommandRange_Singleton
-//
-class ProcessCommandRange_Singleton
-{
-public:
-	static ProcessCommandRange_Singleton*& Instance()
-	{
-		static ProcessCommandRange_Singleton* s_ptr = nullptr;
-		return s_ptr;
-	}
-
-public:
-	ProcessCommandRange_Singleton( uint32_t threads, uint32_t flags ) : m_nThreads( threads )
-	{
-		Assert( !Instance() );
-		Instance() = this;
-		Startup( flags );
-	}
-
-	~ProcessCommandRange_Singleton()
-	{
-		Assert( Instance() == this );
-		Instance() = nullptr;
-		Shutdown();
-	}
-
-public:
-	void ProcessCommandRange( uint64_t shaderStart, uint64_t shaderEnd );
-
-	void Stop();
-	bool Stoped() const { return m_bStopped; }
-
-protected:
-	void Startup( uint32_t flags );
-	void Shutdown();
-
-	using MT = CWorkerAccumState<std::mutex>;
-	using ST = CWorkerAccumState<Threading::null_mutex>;
-
-	union
-	{
-		MT* m_MT;
-		ST* m_ST;
-	};
-
-	const uint32_t m_nThreads;
-	bool m_bStopped = false;
-};
-
-// TODO: Cleanup this hack
-static void StopCommandRange()
-{
-	ProcessCommandRange_Singleton::Instance()->Stop();
-}
-
-void ProcessCommandRange_Singleton::Startup( uint32_t flags )
-{
-	if ( m_nThreads > 1 )
-	{
-		// Make sure that our mutex is in multi-threaded mode
-		Threading::g_mtxGlobal.EnableThreadedMode();
-		Threading::g_mtxMsgReport.EnableThreadedMode();
-
-		m_MT = new MT( flags );
-	}
-	else // Otherwise initialize single-threaded mode
-		m_ST = new ST( flags );
-}
-
-void ProcessCommandRange_Singleton::Shutdown()
-{
-	if ( m_nThreads > 1 )
-		delete m_MT;
-	else
-		delete m_ST;
-}
-
-void ProcessCommandRange_Singleton::Stop()
-{
-	m_bStopped = true;
-	if ( m_nThreads > 1 )
-		m_MT->Stop();
-	else
-		m_ST->Stop();
-}
-
-void ProcessCommandRange_Singleton::ProcessCommandRange( uint64_t shaderStart, uint64_t shaderEnd )
-{
-	if ( m_nThreads > 1 )
-	{
-		m_MT->RangeBegin( shaderStart, shaderEnd );
-		m_MT->Run( m_nThreads );
-		m_MT->RangeFinished();
-	}
-	else
-	{
-		m_ST->RangeBegin( shaderStart, shaderEnd );
-		m_ST->OnProcessST();
-		m_ST->RangeFinished();
-	}
 }
 
 static void Shader_ParseShaderInfoFromCompileCommands( const CfgProcessor::CfgEntryInfo* pEntry, ShaderInfo_t& shaderInfo )
@@ -1233,40 +817,420 @@ static std::unique_ptr<CfgProcessor::CfgEntryInfo[]> Shared_ParseListOfCompileCo
 	return arrEntries;
 }
 
-static void CompileShaders( std::unique_ptr<CfgProcessor::CfgEntryInfo[]> arrEntries, uint32_t threads, uint32_t flags )
+class CompileScheduler
 {
-	ProcessCommandRange_Singleton pcr{ threads, flags };
+public:
+	CompileScheduler( std::vector<const CfgProcessor::CfgEntryInfo*> entries, uint32_t threads, uint32_t workers, uint32_t flags, Progress::Model& progress );
+	~CompileScheduler();
 
+	static CompileScheduler*& Instance()
+	{
+		static CompileScheduler* s_ptr = nullptr;
+		return s_ptr;
+	}
+
+	void Run();
+	void Stop();
+
+private:
+	struct Slot
+	{
+		int index = 0;
+		const CfgProcessor::CfgEntryInfo* pEntry = nullptr;
+		size_t shader = 0;
+		CfgProcessor::ComboHandle hNext = nullptr;
+		uint64_t iNextCommand = 0;
+		uint64_t iEndCommand = 0;
+		uint64_t iLastFinished = 0;
+		uint64_t iNextExpected = 0;
+		std::vector<uint64_t> running;
+		uint32_t busy = 0;
+		bool finalizing = false;
+	};
+
+	void Assign( Slot& slot, size_t shader );
+	void Worker( uint32_t thread );
+	void ExecuteCompileCommand( Slot& slot, CfgProcessor::ComboHandle hCombo );
+	void HandleCommandResponse( Slot& slot, CfgProcessor::ComboHandle hCombo, CmdSink::IResponse* pResponse );
+	void PackageFinished( Slot& slot, uint64_t iCommandNumber );
+	void Finalize( Slot& slot );
+
+	std::vector<const CfgProcessor::CfgEntryInfo*> m_entries;
+	std::vector<Slot> m_slots;
+	size_t m_nextShader = 0;
+	size_t m_nextSlot = 0;
+	const uint32_t m_nThreads;
+	const uint32_t m_iFlags;
+	Progress::Model& m_progress;
+	std::mutex m_mutex;
+	std::condition_variable m_cv;
+	std::atomic<bool> m_bBreak{ false };
+};
+
+CompileScheduler::CompileScheduler( std::vector<const CfgProcessor::CfgEntryInfo*> entries, uint32_t threads, uint32_t workers, uint32_t flags, Progress::Model& progress )
+	: m_entries( std::move( entries ) ), m_nThreads( threads ), m_iFlags( flags ), m_progress( progress )
+{
+	Assert( !Instance() );
+	Instance() = this;
+
+	// Make sure that our mutex is in multi-threaded mode
+	Threading::g_mtxGlobal.EnableThreadedMode();
+	Threading::g_mtxMsgReport.EnableThreadedMode();
+
+	const size_t slots = std::min<size_t>( std::max<uint32_t>( workers, 1 ), m_entries.size() );
+	m_progress.SetWorkers( gsl::narrow<uint32_t>( slots ) );
+	m_slots.resize( slots );
+	for ( size_t i = 0; i < slots; ++i )
+	{
+		Slot& slot = m_slots[i];
+		slot.index = gsl::narrow<int>( i );
+		slot.running.assign( m_nThreads, ~0ULL );
+		Assign( slot, m_nextShader++ );
+	}
+}
+
+CompileScheduler::~CompileScheduler()
+{
+	for ( Slot& slot : m_slots )
+		CfgProcessor::Combo_Free( slot.hNext );
+
+	Instance() = nullptr;
+}
+
+void CompileScheduler::Assign( Slot& slot, size_t shader )
+{
+	const CfgProcessor::CfgEntryInfo* pEntry = m_entries[shader];
+	slot.pEntry        = pEntry;
+	slot.shader        = shader;
+	slot.iNextCommand  = pEntry->m_iCommandStart;
+	slot.iEndCommand   = pEntry->m_iCommandEnd;
+	slot.iLastFinished = pEntry->m_iCommandStart;
+	slot.iNextExpected = pEntry->m_iCommandStart;
+	slot.busy          = 0;
+	slot.finalizing    = false;
+	std::fill( slot.running.begin(), slot.running.end(), ~0ULL );
+	CfgProcessor::Combo_GetNext( slot.iNextCommand, slot.hNext, slot.iEndCommand );
+	m_progress.Begin( shader, slot.index );
+}
+
+void CompileScheduler::Run()
+{
+	std::vector<std::thread> threads;
+	threads.reserve( m_nThreads );
+	for ( uint32_t i = 0; i < m_nThreads; ++i )
+		threads.emplace_back( &CompileScheduler::Worker, this, i );
+
+	for ( std::thread& thread : threads )
+		thread.join();
+}
+
+void CompileScheduler::Stop()
+{
+	m_bBreak.store( true, std::memory_order_release );
+	{
+		std::lock_guard guard{ m_mutex };
+	}
+	m_cv.notify_all();
+}
+
+void CompileScheduler::Worker( uint32_t thread )
+{
+	for ( ;; )
+	{
+		Slot* pSlot = nullptr;
+		CfgProcessor::ComboHandle hCombo = nullptr;
+		bool bFinalize = false;
+		{
+			std::unique_lock guard{ m_mutex };
+			for ( ;; )
+			{
+				if ( m_bBreak.load( std::memory_order_acquire ) )
+					return;
+
+				bool bAnyActive = false;
+				for ( Slot& slot : m_slots )
+				{
+					if ( !slot.pEntry )
+						continue;
+
+					bAnyActive = true;
+					if ( !slot.hNext && !slot.busy && !slot.finalizing )
+					{
+						slot.finalizing = true;
+						pSlot = &slot;
+						bFinalize = true;
+						break;
+					}
+				}
+
+				if ( pSlot )
+					break;
+
+				if ( !bAnyActive )
+				{
+					m_cv.notify_all();
+					return;
+				}
+
+				for ( size_t i = 0; i < m_slots.size(); ++i )
+				{
+					const size_t index = ( m_nextSlot + i ) % m_slots.size();
+					Slot& slot = m_slots[index];
+					if ( !slot.pEntry || !slot.hNext )
+						continue;
+
+					m_nextSlot = index + 1;
+					hCombo = CfgProcessor::Combo_Alloc( slot.hNext );
+					const uint64_t iCommand = CfgProcessor::Combo_GetCommandNum( hCombo );
+					if ( iCommand > slot.iNextExpected )
+						m_progress.Advance( slot.shader, iCommand - slot.iNextExpected );
+
+					slot.iNextExpected = iCommand + 1;
+					slot.running[thread] = iCommand;
+					++slot.busy;
+					CfgProcessor::Combo_GetNext( slot.iNextCommand, slot.hNext, slot.iEndCommand );
+					pSlot = &slot;
+					break;
+				}
+
+				if ( pSlot )
+					break;
+
+				m_cv.wait( guard );
+			}
+		}
+
+		if ( bFinalize )
+		{
+			Finalize( *pSlot );
+			continue;
+		}
+
+		ExecuteCompileCommand( *pSlot, hCombo );
+		CfgProcessor::Combo_Free( hCombo );
+
+		{
+			std::lock_guard guard{ m_mutex };
+			pSlot->running[thread] = ~0ULL;
+			--pSlot->busy;
+			m_progress.Advance( pSlot->shader, 1 );
+			if ( !pSlot->hNext && !pSlot->busy )
+				m_cv.notify_all();
+		}
+	}
+}
+
+void CompileScheduler::ExecuteCompileCommand( Slot& slot, CfgProcessor::ComboHandle hCombo )
+{
+	if ( g_bVerbose2 )
+	{
+		char chReadBuf[4096];
+		Combo_FormatCommandHumanReadable( hCombo, chReadBuf );
+		std::lock_guard guard{ Threading::g_mtxMsgReport };
+		std::cout << "running: \""sv << clr::green << chReadBuf << clr::reset << "\""sv << std::endl;
+	}
+
+	CmdSink::IResponse* pResponse = nullptr;
+	Compiler::ExecuteCommand( Combo_BuildCommand( hCombo ), pResponse, m_iFlags );
+
+	HandleCommandResponse( slot, hCombo, pResponse );
+}
+
+void CompileScheduler::HandleCommandResponse( Slot& slot, CfgProcessor::ComboHandle hCombo, CmdSink::IResponse* pResponse )
+{
+	Assert( pResponse );
+
+	// Command info
+	const CfgProcessor::CfgEntryInfo* pEntryInfo = Combo_GetEntryInfo( hCombo );
+	const uint64_t iComboIndex                   = Combo_GetComboNum( hCombo );
+	const uint64_t iCommandNumber                = Combo_GetCommandNum( hCombo );
+
+	if ( pResponse->Succeeded() )
+	{
+		std::lock_guard guard{ Threading::g_mtxGlobal };
+		const uint64_t nStComboIdx = iComboIndex / pEntryInfo->m_numDynamicCombos;
+		const uint64_t nDyComboIdx = iComboIndex - ( nStComboIdx * pEntryInfo->m_numDynamicCombos );
+		StaticComboFromDictAdd( pEntryInfo->m_szName, nStComboIdx )->AddDynamicCombo( nDyComboIdx, pResponse->GetResultBuffer(), pResponse->GetResultBufferLen() );
+	}
+	else // Tell the master that this shader failed
+	{
+		std::lock_guard guard{ Threading::g_mtxGlobal };
+		ShaderHadErrorDispatchInt( pEntryInfo->m_szName );
+	}
+
+	// Process listing even if the shader succeeds for warnings
+	const char* szListing = pResponse->GetListing();
+	if ( szListing || !pResponse->Succeeded() )
+	{
+		char chUnreportedListing[0xFF];
+		if ( !szListing )
+		{
+			sprintf_s( chUnreportedListing, sizeof( chUnreportedListing ), "%s(0,0): error 0000: Compiler failed without error description. Command number %" PRIu64, pEntryInfo->m_szShaderFileName.data(), iCommandNumber );
+			szListing = chUnreportedListing;
+		}
+
+		char chBuffer[4096];
+		Combo_FormatCommandHumanReadable( hCombo, chBuffer );
+
+		ErrMsgDispatchMsgLine( chBuffer, szListing, pEntryInfo->m_szName );
+		if ( !pResponse->Succeeded() && g_bFastFail )
+			Stop();
+	}
+
+	pResponse->Release();
+
+	// Maybe zip things up
+	PackageFinished( slot, iCommandNumber );
+}
+
+void CompileScheduler::PackageFinished( Slot& slot, uint64_t iCommandNumber )
+{
+	const uint64_t iFinishedByNow = iCommandNumber + 1;
+	uint64_t iLastFinished;
+	{
+		std::lock_guard guard{ m_mutex };
+
+		// Check if somebody is running an earlier command
+		for ( const uint64_t iRunningCommand : slot.running )
+		{
+			if ( iRunningCommand < iCommandNumber )
+				return;
+		}
+
+		if ( iFinishedByNow <= slot.iLastFinished )
+			return;
+
+		iLastFinished = slot.iLastFinished;
+		slot.iLastFinished = iFinishedByNow;
+	}
+
+	CfgProcessor::ComboHandle hChBegin = CfgProcessor::Combo_GetCombo( iLastFinished );
+	CfgProcessor::ComboHandle hChEnd   = CfgProcessor::Combo_GetCombo( iFinishedByNow );
+
+	Assert( hChBegin && hChEnd );
+
+	const CfgProcessor::CfgEntryInfo* pInfoBegin = Combo_GetEntryInfo( hChBegin );
+	const CfgProcessor::CfgEntryInfo* pInfoEnd   = Combo_GetEntryInfo( hChEnd );
+
+	uint64_t nComboBegin     = Combo_GetComboNum( hChBegin ) / pInfoBegin->m_numDynamicCombos;
+	const uint64_t nComboEnd = Combo_GetComboNum( hChEnd ) / pInfoEnd->m_numDynamicCombos;
+
+	for ( ; pInfoBegin && ( pInfoBegin->m_iCommandStart < pInfoEnd->m_iCommandStart || nComboBegin > nComboEnd ); )
+	{
+		// Zip this combo
+		CUtlBuffer mbPacked;
+		const size_t nPackedLength = AssembleWorkerReplyPackage( pInfoBegin, nComboBegin, mbPacked );
+
+		if ( nPackedLength )
+		{
+			// Packed buffer
+			uint8_t* pCodeBuffer;
+			{
+				std::lock_guard guard{ Threading::g_mtxGlobal };
+				pCodeBuffer = StaticComboFromDictAdd( pInfoBegin->m_szName, nComboBegin )->AllocPackedCodeBlock( nPackedLength );
+			}
+
+			if ( pCodeBuffer )
+			{
+				mbPacked.SeekGet( CUtlBuffer::SEEK_HEAD, 0 );
+				mbPacked.Get( pCodeBuffer, gsl::narrow<int>( nPackedLength ) );
+			}
+		}
+
+		// Next iteration
+		if ( !nComboBegin-- )
+		{
+			Combo_Free( hChBegin );
+			if ( ( hChBegin = CfgProcessor::Combo_GetCombo( pInfoBegin->m_iCommandEnd ) ) != nullptr )
+			{
+				pInfoBegin  = Combo_GetEntryInfo( hChBegin );
+				nComboBegin = pInfoBegin->m_numStaticCombos - 1;
+			}
+		}
+	}
+
+	Combo_Free( hChBegin );
+	Combo_Free( hChEnd );
+}
+
+void CompileScheduler::Finalize( Slot& slot )
+{
+	const CfgProcessor::CfgEntryInfo* pEntry = slot.pEntry;
+
+	// Finish packaging data
+	if ( slot.iEndCommand > pEntry->m_iCommandStart )
+		PackageFinished( slot, slot.iEndCommand - 1 );
+
+	//
+	// Now when the whole shader is finished we can write it
+	//
+	const std::string_view name = pEntry->m_szName;
+	WriteShaderFiles( name );
+
+	bool bFailed;
+	{
+		std::lock_guard guard{ Threading::g_mtxGlobal };
+		bFailed = g_ShaderHadError.contains( name );
+	}
+
+	bool bWarnings;
+	{
+		std::lock_guard guard{ Threading::g_mtxMsgReport };
+		const auto find = g_CompilerMsg.find( name );
+		bWarnings = find != g_CompilerMsg.end() && !find->second.warning.empty();
+	}
+
+	Progress::Status status = Progress::Status::Compiled;
+	if ( bFailed )
+		status = Progress::Status::Failed;
+	else if ( bWarnings )
+		status = Progress::Status::Warnings;
+
+	m_progress.Finish( slot.shader, status );
+
+	{
+		std::lock_guard guard{ m_mutex };
+		slot.finalizing = false;
+		if ( m_nextShader < m_entries.size() && !m_bBreak.load( std::memory_order_acquire ) )
+			Assign( slot, m_nextShader++ );
+		else
+			slot.pEntry = nullptr;
+	}
+	m_cv.notify_all();
+}
+
+static void CompileShaders( std::unique_ptr<CfgProcessor::CfgEntryInfo[]> arrEntries, uint32_t threads, uint32_t workers, uint32_t flags, Progress::Model& progress, bool bFullScreen )
+{
 	//
 	// We will iterate on the cfg entries and process them
 	//
+	std::vector<const CfgProcessor::CfgEntryInfo*> entries;
 	for ( const CfgProcessor::CfgEntryInfo* pEntry = arrEntries.get(); pEntry && !pEntry->m_szName.empty(); ++pEntry )
 	{
 		//
 		// Stick the shader info
 		//
 		ShaderInfo_t siLastShaderInfo;
-		memset( &siLastShaderInfo, 0, sizeof( siLastShaderInfo ) );
-
 		Shader_ParseShaderInfoFromCompileCommands( pEntry, siLastShaderInfo );
-
 		g_ShaderToShaderInfo[pEntry->m_szName] = siLastShaderInfo;
 
-		//
-		// Compile stuff
-		//
-		pcr.ProcessCommandRange( pEntry->m_iCommandStart, pEntry->m_iCommandEnd );
-
-		if ( pcr.Stoped() )
-			break;
-
-		//
-		// Now when the whole shader is finished we can write it
-		//
-		WriteShaderFiles( pEntry->m_szName );
+		progress.Add( pEntry->m_szName, pEntry->m_iCommandEnd - pEntry->m_iCommandStart );
+		entries.emplace_back( pEntry );
 	}
 
-	std::cout << "\r"sv << clr::escaped( lineRewind ) << endLine;
+	std::cout << std::endl;
+	EnsureVcsDirectory();
+
+	//
+	// Compile stuff
+	//
+	CompileScheduler scheduler( std::move( entries ), threads, workers, flags, progress );
+	Ui::Display display( progress, bFullScreen );
+	scheduler.Run();
+	display.Stop();
+
+	for ( const std::string& message : g_DeferredMessages )
+		std::cout << clr::pinkish << message << clr::reset << std::endl;
 }
 
 static LONG WINAPI ExceptionFilter( _EXCEPTION_POINTERS* pExceptionInfo )
@@ -1414,8 +1378,9 @@ static BOOL WINAPI CtrlHandler( DWORD signal )
 	if ( signal == CTRL_C_EVENT )
 	{
 		s_write = false;
-		if ( auto inst = ProcessCommandRange_Singleton::Instance() )
+		if ( auto inst = CompileScheduler::Instance() )
 			inst->Stop();
+		Ui::RestoreTerminal();
 		PrintCompileErrors( false );
 		SetThreadExecutionState( ES_CONTINUOUS );
 	}
@@ -1461,6 +1426,8 @@ int main( int argc, const char* argv[] )
 	cmdLine.add( "", false, 0, 0, "Generate only header", "-dynamic", "/dynamic" );
 	cmdLine.add( "", false, 0, 0, "Stop on first error", "-fastfail", "/fastfail" );
 	cmdLine.add( "0", false, 1, 0, "Number of threads used, defaults to core count", "-threads", "/threads" );
+	cmdLine.add( "4", false, 1, 0, "Number of shaders compiled at once", "-workers", "/workers" );
+	cmdLine.add( "", false, 0, 0, "Plain progress output instead of the full screen display", "-noui", "/noui" );
 	cmdLine.add( "", false, 0, 0, "Shows help", "-help", "-h", "/help", "/h" );
 
 	cmdLine.add( "", false, 0, 0, "Verbose file cache and final shader info", "-verbose", "/verbose" );
@@ -1627,7 +1594,12 @@ int main( int argc, const char* argv[] )
 
 	unsigned long threads = 0;
 	cmdLine.get( "-threads" )->getULong( threads );
-	CompileShaders( std::move( entries ), threads ? threads : std::thread::hardware_concurrency(), flags );
+	unsigned long workers = 4;
+	cmdLine.get( "-workers" )->getULong( workers );
+
+	Progress::Model progress;
+	const bool bFullScreen = !cmdLine.isSet( "-noui" ) && !g_bVerbose && !g_bVerbose2 && Ui::CanUseFullScreen();
+	CompileShaders( std::move( entries ), threads ? threads : std::max( 1u, std::thread::hardware_concurrency() ), workers ? workers : 1, flags, progress, bFullScreen );
 
 	WriteStats( false );
 

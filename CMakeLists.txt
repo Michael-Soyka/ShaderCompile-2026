@@ -24,6 +24,7 @@ set(SRC
     ShaderCompile/ShaderCompile.cpp
     ShaderCompile/shaderlist.cpp
     ShaderCompile/shaderparser.cpp
+    ShaderCompile/ui.cpp
     ShaderCompile/utlbuffer.cpp
     )
 
