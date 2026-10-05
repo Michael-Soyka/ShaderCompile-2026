@@ -1,14 +1,17 @@
 # ShaderCompile
 
-Standalone shadercompile, that doesn't depend on valve libraries and supports x64. Also removes dependencies
-on external tools (no perl or DxSdk)
+Standalone shadercompile, that doesn't depend on valve libraries and supports x64.
+*It's also removes dependencies on external tools (no perl or DxSdk)*
+
+<img width="1080" height="575" alt="665325095-e12b26c2-7d12-4ac5-ba94-285462d2e6a9" src="https://github.com/user-attachments/assets/3313d8be-7625-4775-adbd-5803e6c6f5a9" />
+<p align="center">ShaderCompile26 TUI with 6 workers</p>
 
 All the credit for this codebase goes to SCell555!
 https://github.com/SCell555/ShaderCompile
 
 ## Usage
 
-```
+```batch
 ShaderCompile26.exe [OPTIONS] -shaderpath src_dir
 ```
 
@@ -24,59 +27,72 @@ Paths are relative to `src_dir`. `#include` is resolved relative to the includin
 Without `-group` all groups are compiled.
 
 ## Options
+### General
+| Flags                      | Description                                                           |
+| -                          | -                                                                     |
+| -shaderpath PATH           | Base path for shaders, must contain shaders.toml, required            |
+| -group STRINGs             | Compile only these groups from shaders.toml                           |
+| -game PATH                 | Copy compiled shaders of selected groups to game directory            |
+| -output PATH               | Directory for include and shaders/fxc output, defaults to -shaderpath |
+| -crc                       | Calculate crc for shader                                              |
+| -dynamic                   | Generate only header                                                  |
+| -force                     | Skip crc check during compilation                                     |
+| -threads COUNT             | Number of threads used, defaults to core count                        |
+| -workers COUNT             | Number of shaders compiled at once, defaults to 4                     |
+| -noui                      | Plain progress output instead of the full screen display              |
 
-```
--shaderpath ARG                Base path for shaders, must contain shaders.toml, required
--group ARG                     Compile only these groups from shaders.toml
--game ARG                      Copy compiled shaders of selected groups to game directory
--output ARG                    Directory for include and shaders/fxc output, defaults to -shaderpath
--crc                           Calculate crc for shader
--dynamic                       Generate only header
--force                         Skip crc check during compilation
--threads ARG                   Number of threads used, defaults to core count
--workers ARG                   Number of shaders compiled at once, defaults to 4
--noui                          Plain progress output instead of the full screen display
+### Service
+| Flags                      | Description                              |
+| -                          | -                                        |
+| -h, -help                  | Shows help                               |
+| -verbose                   | Verbose file cache and final shader info |
+| -verbose2                  | Verbose compile commands                 |
+| -verbose_preprocessor      | Enables preprocessor debug printing      |
 
--h, -help                      Shows help
--verbose                       Verbose file cache and final shader info
--verbose2                      Verbose compile commands
--verbose_preprocessor          Enables preprocessor debug printing
+### Optimization
+| Flags                      | Description                                                            |
+| -                          | -                                                                      |
+| -disable-optimization, /Od | Disables shader optimization                                           |
+| -disable-preshader, /Op    | Disables preshader generation                                          |
+| -no-flow-control, /Gfa     | Directs the compiler to not use flow-control constructs where possible |
+| -prefer-flow-control, /Gfp | Directs the compiler to use flow-control constructs where possible     |
+| -partial-precision, /Gpp   | Compiles shader with partial precission                                |
+| -no-validation, /Vd        | Skips shader validation                                                |
 
--disable-optimization, /Od     Disables shader optimization
--disable-preshader, /Op        Disables preshader generation
--no-flow-control, /Gfa         Directs the compiler to not use flow-control constructs where possible
--prefer-flow-control, /Gfp     Directs the compiler to use flow-control constructs where possible
--partial-precision, /Gpp       Compiles shader with partial precission
--no-validation, /Vd            Skips shader validation
-```
+## Parallel build
 
-## Parallel build and progress display
+Up to 4 by default (and specific count with `-workers COUNT`) shaders are compiled at once.
 
-Up to `-workers` shaders are compiled at once. All `-threads` threads share one pool and take combos from the active shaders in turn, so a small shader or the tail of a big one does not leave cores idle. A finished shader is written to `.vcs` right away and the next one from the queue takes its place. `-workers 1` compiles shaders one by one.
+All `-threads COUNT` threads share one pool and take combos from the active shaders in turn, so a small shader or the tail of a big one does not leave cores idle.
 
-In a console the progress is shown full screen:
+For legacy mode use `-workers 1`, it will compile shaders one by one.
 
-- top: queue of all shaders, white compiled, yellow with warnings, red failed, green compiling, gray waiting;
-- middle: one line per worker with progress bar, remaining combos, combos per second and estimated time;
-- bottom: shader count, success / warning / error totals and elapsed time.
+## TUI
+Now, there is graphical representation of the whole compile process!
 
-After the build the console returns to the normal screen with a `<shader> compiled in <time>` line per shader, warnings and errors.
+Layout guide:
+- top: Queue of all shaders. White - compiled, Yellow - warnings, Red - failed, Green - compiling, Gray - waiting;
+- middle: shows workers status line by line depends `-workers COUNT`;
+- bottom: Status bar.
 
-The full screen display is turned off by `-noui`, `-verbose`, `-verbose2`, redirected output or a console smaller than 60x10. Then only the `compiled in` lines and the summary are printed.
+After the build the console returns to the normal screen with a `<shader> compiled in <time>` line per shader.
+
+The TUI can be turned off by `-noui`, `-verbose`, `-verbose2` flags, redirected output with other scripts or if the terminal window smaller than 60x10.
 
 ## Shader model version support
 
-Minimum shader model is 3.0. Supported versions: `30`, `40`, `41`, `50`, `51`.
-&NewLine;  
-&NewLine;  
-Version from file name suffix
+Supported versions: `30`, `40`, `41`, `50`, `51`.
 
-```
-30, 40, 41, 50, 51   as is
-xx, 3x               30
-4x                   40
-5x                   50
-```
+Minimum shader model is 3.0.
+
+Version from file name suffix:
+
+| Suffix             | Version |
+| -                  | -       |
+| 30, 40, 41, 50, 51 | same    |
+| xx, 3x             | 30      |
+| 4x                 | 40      |
+| 5x                 | 50      |
 
 ## Getting started
 
@@ -96,25 +112,24 @@ VS2013 folder
 
  pass a group name (or nothing to build every group) instead of the project name, without `-dx9_30` and `-force30`, so
 ```batch
-    %BUILD_SHADER% stdshader_dx9_30 -game %GAMEDIR% -source %SOURCEDIR% -dx9_30 -force30 
-    ```
+%BUILD_SHADER% stdshader_dx9_30 -game %GAMEDIR% -source %SOURCEDIR% -dx9_30 -force30 
+```
 looks like
 ```batch
-    %BUILD_SHADER% -game %GAMEDIR% -source %SOURCEDIR%
-    ```
+%BUILD_SHADER% -game %GAMEDIR% -source %SOURCEDIR%
+```
 
 6. Optionally remove all perl scripts for compiling shaders from devtools/bin, as they will be never used again
-
-   ```
-   buildshaderlist.pl
-   checkshaderchecksums.pl
-   copyshaderincfiles.pl
-   copyshaders.pl
-   fxc_prep.pl
-   psh_prep.pl
-   shaderinfo.pl
-   uniqifylist.pl
-   updateshaders.pl
-   valve_perl_helpers.pl
-   vsh_prep.pl
-   ```
+```
+buildshaderlist.pl
+checkshaderchecksums.pl
+copyshaderincfiles.pl
+copyshaders.pl
+fxc_prep.pl
+psh_prep.pl
+shaderinfo.pl
+uniqifylist.pl
+updateshaders.pl
+valve_perl_helpers.pl
+vsh_prep.pl
+```
