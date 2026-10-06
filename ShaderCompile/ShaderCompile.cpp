@@ -34,6 +34,7 @@
 #include "cfgprocessor.h"
 #include "cmdsink.h"
 #include "d3dxfxc.h"
+#include "dxc.h"
 #include "shader_vcs_version.h"
 #include "utlbuffer.h"
 #include "utlnodehash.h"
@@ -340,23 +341,38 @@ static void ErrMsgDispatchMsgLine( const char* szCommand, const char* szMsgLine,
 	char *start = dupMsg, *end = dupMsg + strlen( dupMsg );
 	char* start2 = start;
 
+	// fxc "warning X1234", DXC "file(line,col) :  warning:"
+	const auto& isWarning = []( const char* szLine )
+	{
+		return ( strstr( szLine, "warning X" ) != nullptr ) || ( strstr( szLine, " warning:" ) != nullptr );
+	};
+
 	// Now store the message with the command it was generated from
 	for ( ; start2 < end && ( start = strchr( start2, '\n' ) ); start2 = start + 1 )
 	{
 		*start = 0;
-		if ( strstr( start2, "warning X" ) )
+		if ( isWarning( start2 ) )
+		{
 			msg.warning[start2].SetMsgReportedCommand( szCommand );
+		}
 		else
+		{
 			msg.error[start2].SetMsgReportedCommand( szCommand );
+		}
 	}
 
 	if ( start2 < end )
 	{
-		if ( strstr( start2, "warning X" ) )
+		if ( isWarning( start2 ) )
+		{
 			msg.warning[start2].SetMsgReportedCommand( szCommand );
+		}
 		else
+		{
 			msg.error[start2].SetMsgReportedCommand( szCommand );
+		}
 	}
+
 	free( dupMsg );
 }
 
@@ -456,25 +472,33 @@ static std::vector<std::string> g_DeferredMessages;
 
 static void EnsureVcsDirectory()
 {
-	const auto path = g_pOutputPath / "shaders"sv / "fxc"sv;
-
-	fs::directory_entry status( path );
-	if ( !status.exists() )
+	for ( const std::string_view subdir : { "fxc"sv, "spirv"sv } )
 	{
-		std::cout << clr::pinkish << "mkdir "sv << path << clr::reset;
-		// doh. . need to make the directory that the vcs file is going to go into.
-		std::error_code c;
-		fs::create_directories( path, c );
-		if ( c )
-			std::cout << clr::red << " Failed! "sv << c.message() << clr::reset << std::endl;
-		else
-			std::cout << std::endl;
+		const auto path = g_pOutputPath / "shaders"sv / subdir;
+
+		fs::directory_entry status( path );
+		if ( !status.exists() )
+		{
+			std::cout << clr::pinkish << "mkdir "sv << path << clr::reset;
+
+			// doh. . need to make the directory that the vcs file is going to go into.
+			std::error_code c;
+			fs::create_directories( path, c );
+			if ( c )
+			{
+				std::cout << clr::red << " Failed! "sv << c.message() << clr::reset << std::endl;
+			}
+			else
+			{
+				std::cout << std::endl;
+			}
+		}
 	}
 }
 
 static fs::path GetVCSFilenames( const ShaderInfo_t& si )
 {
-	auto path = g_pOutputPath / "shaders"sv / "fxc"sv;
+	auto path = g_pOutputPath / "shaders"sv / Parser::OutputSubdir( si.m_pShaderName );
 	path /= si.m_pShaderName;
 	path += ".vcs"sv;
 
@@ -1031,7 +1055,17 @@ void CompileScheduler::ExecuteCompileCommand( Slot& slot, CfgProcessor::ComboHan
 	}
 
 	CmdSink::IResponse* pResponse = nullptr;
-	Compiler::ExecuteCommand( Combo_BuildCommand( hCombo ), pResponse, m_iFlags );
+	const CfgProcessor::ComboBuildCommand command = Combo_BuildCommand( hCombo );
+
+	// cs_6_x goes to DXC, everything else to fxc
+	if ( !command.shaderModel.empty() && ( command.shaderModel[0] == 'c' ) )
+	{
+		Dxc::ExecuteCommand( command, pResponse, m_iFlags );
+	}
+	else
+	{
+		Compiler::ExecuteCommand( command, pResponse, m_iFlags );
+	}
 
 	HandleCommandResponse( slot, hCombo, pResponse );
 }
@@ -1608,18 +1642,23 @@ int main( int argc, const char* argv[] )
 	if ( cmdLine.isSet( "-game" ) )
 	{
 		cmdLine.get( "-game" )->getString( path );
-		fs::path src = g_pOutputPath / "shaders"sv / "fxc"sv;
-		fs::path game = fs::absolute( std::move( path ) ) / "shaders"sv / "fxc"sv;
+		const fs::path gameRoot = fs::absolute( std::move( path ) ) / "shaders"sv;
 		std::error_code c;
-		fs::create_directories( game, c );
 
 		for ( auto&& s : g_ShaderToShaderInfo )
 		{
+			const std::string_view subdir = Parser::OutputSubdir( s.second.m_pShaderName );
+			const fs::path src = g_pOutputPath / "shaders"sv / subdir;
+			const fs::path game = gameRoot / subdir;
+			fs::create_directories( game, c );
+
 			fs::path f = fs::path( s.second.m_pShaderName ).replace_extension( ".vcs" );
 			c.clear();
 			fs::copy_file( src / f, game / f, c );
 			if ( c )
+			{
 				std::cout << clr::red << "Coudn't copy "sv << f << " to game shader directory!"sv << clr::reset << std::endl;
+			}
 		}
 	}
 

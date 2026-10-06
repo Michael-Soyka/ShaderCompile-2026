@@ -19,6 +19,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(SRC
     ShaderCompile/cfgprocessor.cpp
     ShaderCompile/d3dxfxc.cpp
+    ShaderCompile/dxc.cpp
     ShaderCompile/includepath.cpp
     ShaderCompile/progress.cpp
     ShaderCompile/ShaderCompile.cpp
@@ -39,3 +40,10 @@ set_property(TARGET ShaderCompile PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<
 set_property(TARGET re2 PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 target_compile_definitions(ShaderCompile PRIVATE _ITERATOR_DEBUG_LEVEL=0)
 target_compile_definitions(re2 PRIVATE _ITERATOR_DEBUG_LEVEL=0)
+
+# DXC for compute shaders, loaded at runtime from the exe directory
+add_custom_command(TARGET ShaderCompile POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/dxc/bin/x64/dxcompiler.dll
+        $<TARGET_FILE_DIR:ShaderCompile>
+)
