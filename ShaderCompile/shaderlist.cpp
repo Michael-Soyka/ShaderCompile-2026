@@ -15,11 +15,11 @@
 namespace fs = std::filesystem;
 using namespace std::literals;
 
-static constexpr std::string_view s_supportedVersions[] = { "30"sv, "40"sv, "41"sv, "50"sv, "51"sv };
+static constexpr std::string_view s_supportedVersions[] = { "30"sv, "40"sv, "41"sv, "50"sv, "51"sv, "60"sv, "61"sv, "62"sv, "63"sv, "64"sv, "65"sv, "66"sv };
 
 ShaderList::VersionResult ShaderList::ResolveVersion( const std::string& fileName, const std::string& groupVersion )
 {
-	static const re2::RE2 suffix( R"reg(^.*_[vpgdh]s(\d\db|\d\d|\dx|xx))reg" );
+	static const re2::RE2 suffix( R"reg(^.*_[vpgdhc]s(\d\db|\d\d|\dx|xx))reg" );
 
 	std::string version = groupVersion;
 	if ( version.empty() )
@@ -167,6 +167,16 @@ std::optional<std::vector<ShaderList::Entry>> ShaderList::Load( const fs::path& 
 			if ( target.empty() )
 			{
 				Error( "\""s + *path + "\": can't determine shader type from file name"s );
+				failed = true;
+				continue;
+			}
+
+			// Compute shaders are SM 6.x only, SM 6.x is compute only
+			const bool bCompute = ( target == "cs" );
+			const bool bModel6 = ( version.version.size() == 2 ) && ( version.version[0] == '6' );
+			if ( bCompute != bModel6 )
+			{
+				Error( "\""s + *path + "\": "s + ( bCompute ? "compute shaders need version 60..66"s : "version 6x is only for compute shaders (_cs)"s ) );
 				failed = true;
 				continue;
 			}

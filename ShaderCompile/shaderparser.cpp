@@ -44,13 +44,13 @@ namespace r
 	static const RE2 inc( R"reg(#\s*include\s*"(.*)")reg" );
 	static const RE2 xbox_reg( R"reg(\[XBOX\])reg" );
 	static const RE2 pc_reg( R"reg(\[PC\])reg" );
-	static const RE2 start( R"reg(^\s*//\s*(STATIC|DYNAMIC|SKIP|CENTROID|[VPGDH]S_MAIN)\s*:\s*(.*)$)reg" );
+	static const RE2 start( R"reg(^\s*//\s*(STATIC|DYNAMIC|SKIP|CENTROID|[VPGDHC]S_MAIN)\s*:\s*(.*)$)reg" );
 	static const RE2 init( R"reg(\[\s*=\s*([^\]]+)\])reg" );
 	static const RE2 static_combo( R"reg(^\s*//\s*STATIC\s*:\s*"(.*)"\s+"(\d+)\.\.(\d+)".*)reg" );
 	static const RE2 dynamic_combo( R"reg(^\s*//\s*DYNAMIC\s*:\s*"(.*)"\s+"(\d+)\.\.(\d+)".*)reg" );
 	static const RE2 centroid( R"reg(^\s*//\s*CENTROID\s*:\s*TEXCOORD(\d+).*$)reg" );
-	static const RE2 base_name( R"reg(^(.*)_[vpgdh]s(\d\db|\d\d|\dx|xx))reg" );
-	static const RE2 target( R"reg(^.*_([vpgdh]s)(\d\db|\d\d|\dx|xx))reg" );
+	static const RE2 base_name( R"reg(^(.*)_[vpgdhc]s(\d\db|\d\d|\dx|xx))reg" );
+	static const RE2 target( R"reg(^.*_([vpgdhc]s)(\d\db|\d\d|\dx|xx))reg" );
 	static const RE2 c_comment_start( R"reg(^(.*)\/\*)reg");
 	static const RE2 c_comment_end( R"reg(\*\/(.*)$)reg");
 	static const RE2 c_inline_comment( R"reg(^(.*)\/\*.*?\*\/(.*))reg");
@@ -71,6 +71,14 @@ std::string Parser::ConstructName( const std::string& baseName, const std::strin
 	if ( re2::RE2::PartialMatch( fileName, r::base_name, &name ) )
 		return name + "_"s + std::string( target ) + std::string( ver );
 	return fs::path( fileName ).stem().string() + "_"s + std::string( target ) + std::string( ver );
+}
+
+std::string_view Parser::OutputSubdir( std::string_view shaderName )
+{
+	static const re2::RE2 compute( R"reg(_cs\d\d$)reg" );
+
+	const bool bCompute = re2::RE2::PartialMatch( re2::StringPiece( shaderName.data(), shaderName.size() ), compute );
+	return bCompute ? "spirv"sv : "fxc"sv;
 }
 
 std::string_view Parser::GetTarget( const std::string& baseName )
@@ -147,20 +155,25 @@ static bool ReadFile( const fs::path& root, const std::string& key, std::vector<
 	return !cComment;
 }
 
-static constexpr const char validL[] = { 'v', 'p', 'g', 'h', 'd' };
-static constexpr const char validU[] = { 'V', 'P', 'G', 'H', 'D' };
+static constexpr const char validL[] = { 'v', 'p', 'g', 'h', 'd', 'c' };
+static constexpr const char validU[] = { 'V', 'P', 'G', 'H', 'D', 'C' };
 bool Parser::ParseFile( const std::string& key, const fs::path& root, const std::string_view& target, const std::string_view& version, CfgProcessor::ShaderConfig& conf )
 {
 	using re2::RE2;
 	conf.centroid_mask = 0U;
 	char regMatch[] = { R"reg(\[ s(\d+\w?)\])reg" };
-	char regNotMatch[] = { R"reg(\[[    ]s\d+\w?\])reg" };
+	char regNotMatch[] = { R"reg(\[[     ]s\d+\w?\])reg" };
 	std::string mainCat = " S_MAIN"s;
 
 	regMatch[2] = target[0];
-	for ( int i = 0, j = 0; i < 5; ++i )
+	for ( int i = 0, j = 0; i < 6; ++i )
+	{
 		if ( validL[i] != target[0] )
+		{
 			regNotMatch[3 + j++] = validL[i];
+		}
+	}
+
 	mainCat[0] = toupper( target[0] );
 	const RE2 shouldMatch( regMatch );
 	const RE2 shouldNotMatch( regNotMatch );
@@ -319,16 +332,24 @@ void Parser::WriteInclude( const fs::path& fileName, const std::string& name, co
 			file << "\n"sv;
 		}
 
-		file << "#pragma once\n" R"(#include "shaderlib/cshader.h")" "\n"sv;
+		const bool bCompute = ( target[0] == 'c' );
+		if ( bCompute )
+		{
+			file << "#pragma once\n" R"(#include "tier0/dbg.h")" "\n"sv;
+		}
+		else
+		{
+			file << "#pragma once\n" R"(#include "shaderlib/cshader.h")" "\n"sv;
+		}
 
-		writeVars( "Static"sv, static_c, "IShaderShadow* pShaderShadow = nullptr, IMaterialVar** params = nullptr"sv,
+		writeVars( "Static"sv, static_c, bCompute ? ""sv : "IShaderShadow* pShaderShadow = nullptr, IMaterialVar** params = nullptr"sv,
 			std::accumulate( dynamic_c.begin(), dynamic_c.end(), 1U, []( uint32_t a, const Combo& b ) { return a * ( b.maxVal - b.minVal + 1 ); } ), false );
 
 		file << "\n"sv;
 
-		writeVars( "Dynamic"sv, dynamic_c, "IShaderDynamicAPI* pShaderAPI = nullptr"sv, 1U, true );
+		writeVars( "Dynamic"sv, dynamic_c, bCompute ? ""sv : "IShaderDynamicAPI* pShaderAPI = nullptr"sv, 1U, true );
 
-		if ( writeSCI )
+		if ( writeSCI && !bCompute )
 		{
 			file << "\n"sv;
 
@@ -371,7 +392,7 @@ bool Parser::CheckCrc( const std::string& key, const fs::path& root, const fs::p
 {
 	uint32_t binCrc = 0;
 	{
-		const auto filePath = output / "shaders"sv / "fxc"sv / ( name + ".vcs" );
+		const auto filePath = output / "shaders"sv / OutputSubdir( name ) / ( name + ".vcs" );
 		std::ifstream file( filePath, std::ios::binary );
 		if ( file )
 		{

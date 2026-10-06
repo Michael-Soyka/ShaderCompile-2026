@@ -24,6 +24,10 @@ namespace Parser
 
 	std::string ConstructName( const std::string& baseName, const std::string_view& target, const std::string_view& ver );
 	std::string_view GetTarget( const std::string& baseName );
+
+	// "spirv" for compute shaders (name ends with _csNN), "fxc" otherwise
+	std::string_view OutputSubdir( std::string_view shaderName );
+
 	bool ParseFile( const std::string& key, const std::filesystem::path& root, const std::string_view& target, const std::string_view& version, CfgProcessor::ShaderConfig& conf );
 	void WriteInclude( const std::filesystem::path& fileName, const std::string& name, const std::string_view& target, const std::vector<Combo>& static_c,
 		const std::vector<Combo>& dynamic_c, const std::vector<std::string>& skip, bool writeSCI );
