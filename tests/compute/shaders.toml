@@ -1,0 +1,25 @@
+[compute]
+files = [
+	'test_fill_cs60.hlsl',
+	'sub/test_include_cs60.hlsl',
+]
+
+[compute_broken]
+files = [
+	'test_broken_cs60.hlsl',
+]
+
+[sm3]
+files = [
+	'test_sm3_ps30.fxc',
+]
+
+[compute_warn]
+files = [
+	'test_warn_cs60.hlsl',
+]
+
+[compute_dupname]
+files = [
+	'sub/test_stack_cs60.hlsl',
+]

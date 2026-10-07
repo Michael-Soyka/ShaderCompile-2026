@@ -1,0 +1,10 @@
+//============ Copyright 2026 Moon-6 Team, All rights reserved. ===============//
+//
+// Purpose: ShaderCompile test, plain SM3 pixel shader next to compute shaders
+//
+//=============================================================================//
+
+float4 main() : COLOR
+{
+	return float4( 1.0f, 0.5f, 0.25f, 1.0f );
+}
