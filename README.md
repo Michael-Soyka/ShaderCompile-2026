@@ -80,16 +80,33 @@ The TUI can be turned off by `-noui`, `-verbose`, `-verbose2` flags, redirected 
 
 ## Shader model version support
 
-Supported versions: `30`, `40`, `41`, `50`, `51`.
+Supported versions: `30`, `40`, `41`, `50`, `51`, and `60`...`66` for compute shaders only.
 
 Version from file name suffix:
 
-| Suffix             | Version |
-| -                  | -       |
-| 30, 40, 41, 50, 51 | same    |
-| xx, 3x             | 30      |
-| 4x                 | 40      |
-| 5x                 | 50      |
+| Type   | Suffix             | Version |
+| -      | -                  | -       |
+| ps, vs | 30, 40, 41, 50, 51 | same    |
+| ps, vs | xx, 3x             | 30      |
+| ps, vs | 4x                 | 40      |
+| ps, vs | 5x                 | 50      |
+| cs     | 60...66,           | same    |
+| cs     | 6x                 | 60      |
+
+### Pixel & Vertex Shader (HLSL)
+
+
+
+### Compute shaders (SPIR-V)
+
+Files with a `_cs60`...`_cs66` suffix are **HlSL** compute shaders compiled by **DXC** to **SPIR-V** for **Vulkan** (`-spirv -fspv-target-env=vulkan1.1 -HV 2021`).
+They stores in the same `shaders.toml` groups and use the same `STATIC` / `DYNAMIC` / `SKIP` combos; `// CS_MAIN: name` changes the entry point.
+
+Hints:
+- Output: `<output>/shaders/spirv/<name>.vcs` (same container as fxc shaders, SPIR-V per combo), `-game` copies to `<game>/shaders/spirv`.
+- `.inc`: index classes without `shaderlib/cshader.h`, constructors take no arguments.
+- In the toolchain (devtools), `dxcompiler.dll` must be next to `ShaderCompile26.exe` (CMake copies it from `dxc/bin/x64`). Without it - compute shaders will fail with warn message, SM3 shaders still build.
+- DXC version: see `dxc/VERSION.txt`.
 
 ## Getting started
 
