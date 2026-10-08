@@ -80,7 +80,7 @@ The TUI can be turned off by `-noui`, `-verbose`, `-verbose2` flags, redirected 
 
 ## Shader model version support
 
-Supported versions: `30`, `40`, `41`, `50`, `51`, and `60`...`66` for compute shaders only.
+Supported versions: `30`, `40`, `41`, `50`, `51`, and `60`...`66` for cs, vs and ps.
 
 Version from file name suffix:
 
@@ -90,12 +90,20 @@ Version from file name suffix:
 | ps, vs | xx, 3x             | 30      |
 | ps, vs | 4x                 | 40      |
 | ps, vs | 5x                 | 50      |
+| ps, vs | 60...66            | same    |
+| ps, vs | 6x                 | 60      |
 | cs     | 60...66,           | same    |
 | cs     | 6x                 | 60      |
 
 ### Pixel & Vertex Shader (HLSL)
 
+Files with a `_vs60`...`_vs66` / `_ps60`...`_ps66` suffix are **HLSL** compiled by **DXC** to **SPIR-V** for the **OTM DXVK** build (`-spirv -fvk-use-dx-layout -fspv-reflect`).
 
+Hints:
+- Output: `<output>/shaders/fxc/<name>.vcs`, next to SM3 shaders. Each combo is an SM3 shell: version token, comment chunks with `OTM_DXVK_SHADER\0`, SPIR-V size and SPIR-V, end token.
+- `$Globals` is bound to the stage constant buffer (VS 0, PS 10); `register( cN )` keeps the D3D9 register.
+- `OTM_STAGE_VS` / `OTM_STAGE_PS` is defined.
+- `.inc` is the regular one with `shaderlib/cshader.h`.
 
 ### Compute shaders (SPIR-V)
 

@@ -1,0 +1,5 @@
+[spirv]
+files = [
+	'test_shell_vs60.hlsl',
+	'test_shell_ps60.hlsl',
+]

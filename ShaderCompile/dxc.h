@@ -1,6 +1,6 @@
 //============ Copyright 2026 Moon-6 Team, All rights reserved. ===============//
 //
-// Purpose: DXC backend, HLSL compute shaders to SPIR-V
+// Purpose: DXC backend, HLSL SM 6.x (cs, vs, ps) to SPIR-V
 //
 //=============================================================================//
 
@@ -15,6 +15,6 @@ namespace CfgProcessor
 
 namespace Dxc
 {
-	// Same contract as Compiler::ExecuteCommand, for cs_6_x models
+	// Same contract as Compiler::ExecuteCommand, for cs/vs/ps 6.x models
 	void ExecuteCommand( const CfgProcessor::ComboBuildCommand& command, CmdSink::IResponse*& pResponse, unsigned int flags );
 }

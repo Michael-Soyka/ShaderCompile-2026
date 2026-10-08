@@ -1,6 +1,6 @@
 //============ Copyright 2026 Moon-6 Team, All rights reserved. ===============//
 //
-// Purpose: DXC backend, HLSL compute shaders to SPIR-V
+// Purpose: DXC backend, HLSL SM 6.x (cs, vs, ps) to SPIR-V
 //
 //=============================================================================//
 
@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 #include <map>
 #include <mutex>
@@ -270,6 +271,40 @@ namespace
 	{
 		pResponse = new( std::nothrow ) DxcResponse( {}, std::move( message ), false );
 	}
+
+	constexpr uint32_t s_nVsVersionToken = 0xFFFE0300;
+	constexpr uint32_t s_nPsVersionToken = 0xFFFF0300;
+	constexpr uint32_t s_nCommentToken = 0xFFFE;
+	constexpr uint32_t s_nEndToken = 0x0000FFFF;
+	constexpr uint32_t s_nMaxCommentWords = 0x7FFF;
+	constexpr char s_szShellMarker[16] = "OTM_DXVK_SHADER";
+
+	// SM3 shell: version, comment chunks with marker + size + SPIR-V, end token
+	std::vector<char> WrapInShell( bool bVertex, const std::vector<char>& spirv )
+	{
+		const size_t nSpirvWords = spirv.size() / sizeof( uint32_t );
+
+		std::vector<uint32_t> payload( 5 + nSpirvWords );
+		std::memcpy( payload.data(), s_szShellMarker, sizeof( s_szShellMarker ) );
+		payload[4] = gsl::narrow<uint32_t>( nSpirvWords );
+		std::memcpy( payload.data() + 5, spirv.data(), nSpirvWords * sizeof( uint32_t ) );
+
+		std::vector<uint32_t> words;
+		words.push_back( bVertex ? s_nVsVersionToken : s_nPsVersionToken );
+
+		for ( size_t pos = 0; pos < payload.size(); pos += s_nMaxCommentWords )
+		{
+			const size_t nCount = std::min<size_t>( s_nMaxCommentWords, payload.size() - pos );
+			words.push_back( ( gsl::narrow<uint32_t>( nCount ) << 16 ) | s_nCommentToken );
+			words.insert( words.end(), payload.begin() + pos, payload.begin() + pos + nCount );
+		}
+
+		words.push_back( s_nEndToken );
+
+		std::vector<char> result( words.size() * sizeof( uint32_t ) );
+		std::memcpy( result.data(), words.data(), result.size() );
+		return result;
+	}
 }
 
 void Dxc::ExecuteCommand( const CfgProcessor::ComboBuildCommand& command, CmdSink::IResponse*& pResponse, unsigned int flags )
@@ -313,6 +348,19 @@ void Dxc::ExecuteCommand( const CfgProcessor::ComboBuildCommand& command, CmdSin
 	args.emplace_back( L"2021" );
 	args.emplace_back( L"-I" );
 	args.emplace_back( L"." );
+
+	// vs/ps run inside our DXVK: D3D9 constant layout, binding of $Globals, semantics for linking
+	const char cStage = command.shaderModel.empty() ? 'c' : command.shaderModel[0];
+	const bool bGraphics = ( cStage == 'v' ) || ( cStage == 'p' );
+	if ( bGraphics )
+	{
+		args.emplace_back( L"-fvk-use-dx-layout" );
+		args.emplace_back( L"-fspv-reflect" );
+		args.emplace_back( L"-fvk-bind-globals" );
+		args.emplace_back( ( cStage == 'v' ) ? L"0" : L"10" );
+		args.emplace_back( L"0" );
+		args.emplace_back( ( cStage == 'v' ) ? L"-DOTM_STAGE_VS=1" : L"-DOTM_STAGE_PS=1" );
+	}
 
 	// fxc's "file(line,col): warning ..." shape, source and caret lines are dropped by DiagnosticLines
 	args.emplace_back( L"-fdiagnostics-format=msvc" );
@@ -375,5 +423,11 @@ void Dxc::ExecuteCommand( const CfgProcessor::ComboBuildCommand& command, CmdSin
 	}
 
 	const bool bSucceeded = SUCCEEDED( hr ) && SUCCEEDED( status ) && !code.empty() && !bConflict;
+
+	if ( bSucceeded && bGraphics )
+	{
+		code = WrapInShell( cStage == 'v', code );
+	}
+
 	pResponse = new( std::nothrow ) DxcResponse( std::move( code ), std::move( listing ), bSucceeded );
 }

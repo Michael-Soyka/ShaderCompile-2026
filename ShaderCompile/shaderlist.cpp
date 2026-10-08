@@ -171,12 +171,13 @@ std::optional<std::vector<ShaderList::Entry>> ShaderList::Load( const fs::path& 
 				continue;
 			}
 
-			// Compute shaders are SM 6.x only, SM 6.x is compute only
+			// Compute shaders are SM 6.x only, SM 6.x is for cs, vs and ps
 			const bool bCompute = ( target == "cs" );
 			const bool bModel6 = ( version.version.size() == 2 ) && ( version.version[0] == '6' );
-			if ( bCompute != bModel6 )
+			const bool bModel6Target = bCompute || ( target == "vs" ) || ( target == "ps" );
+			if ( ( bCompute && !bModel6 ) || ( bModel6 && !bModel6Target ) )
 			{
-				Error( "\""s + *path + "\": "s + ( bCompute ? "compute shaders need version 60..66"s : "version 6x is only for compute shaders (_cs)"s ) );
+				Error( "\""s + *path + "\": "s + ( bCompute ? "compute shaders need version 60..66"s : "version 6x is only for cs, vs and ps"s ) );
 				failed = true;
 				continue;
 			}

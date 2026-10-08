@@ -1057,8 +1057,9 @@ void CompileScheduler::ExecuteCompileCommand( Slot& slot, CfgProcessor::ComboHan
 	CmdSink::IResponse* pResponse = nullptr;
 	const CfgProcessor::ComboBuildCommand command = Combo_BuildCommand( hCombo );
 
-	// cs_6_x goes to DXC, everything else to fxc
-	if ( !command.shaderModel.empty() && ( command.shaderModel[0] == 'c' ) )
+	// SM 6.x (cs, vs, ps) goes to DXC, everything else to fxc
+	const bool bModel6 = ( command.shaderModel.size() > 3 ) && ( command.shaderModel[3] == '6' );
+	if ( bModel6 )
 	{
 		Dxc::ExecuteCommand( command, pResponse, m_iFlags );
 	}

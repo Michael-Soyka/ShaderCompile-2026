@@ -25,6 +25,14 @@ function Run( [string]$Groups, [string]$Exe )
 	return $result
 }
 
+function RunIn( [string]$Source, [string]$Groups, [string]$Exe )
+{
+	Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
+	$log = & $Exe -shaderpath $Source -output $out -group $Groups -force -noui -workers 4 -threads 8 2>&1 | Out-String
+	$result = [pscustomobject]@{ Code = $LASTEXITCODE; Log = $log }
+	return $result
+}
+
 # compute and SM3 together
 $r = Run 'compute,sm3' $Exe
 Check 'compute+sm3 exit code' ( $r.Code -eq 0 ) "exit $($r.Code)`n$($r.Log)"
@@ -72,6 +80,28 @@ $r = Run 'compute,sm3' ( Join-Path $copy ( Split-Path $Exe -Leaf ) )
 Check 'no dxc message' ( $r.Log -match 'dxcompiler\.dll not found next to ShaderCompile26\.exe' ) "message`n$($r.Log)"
 Check 'no dxc sm3 built' ( Test-Path ( Join-Path $out 'shaders\fxc\test_sm3_ps30.vcs' ) ) 'missing'
 Remove-Item $copy -Recurse -Force -ErrorAction SilentlyContinue
+
+# vs/ps 6.x: SPIR-V in an SM3 shell, shaders/fxc
+$r = RunIn ( Join-Path $PSScriptRoot 'spirv' ) 'spirv' $Exe
+Check 'spirv exit code' ( $r.Code -eq 0 ) "exit $($r.Code)`n$($r.Log)"
+$vs = Join-Path $out 'shaders\fxc\test_shell_vs60.vcs'
+$ps = Join-Path $out 'shaders\fxc\test_shell_ps60.vcs'
+Check 'spirv vs in fxc' ( Test-Path $vs ) 'missing'
+Check 'spirv ps in fxc' ( Test-Path $ps ) 'missing'
+if ( Test-Path $vs )
+{
+	python ( Join-Path $PSScriptRoot 'verify_spirv.py' ) $vs 1 vs '0' | Write-Output
+	Check 'spirv vs shell' ( $LASTEXITCODE -eq 0 ) 'verify_spirv failed'
+}
+if ( Test-Path $ps )
+{
+	# g_Probe is c5: DXC must put it at 5 * 16
+	python ( Join-Path $PSScriptRoot 'verify_spirv.py' ) $ps 4 ps '10,13,36' 'g_Probe=80' | Write-Output
+	Check 'spirv ps shell' ( $LASTEXITCODE -eq 0 ) 'verify_spirv failed'
+}
+$psInc = Join-Path $out 'include\test_shell_ps60.inc'
+$psIncText = if ( Test-Path $psInc ) { Get-Content $psInc -Raw } else { '' }
+Check 'spirv ps inc with cshader.h' ( $psIncText -match 'cshader\.h' ) 'inc content'
 
 Write-Output "failed: $failed"
 exit $failed
