@@ -3,3 +3,8 @@ files = [
 	'test_shell_vs60.hlsl',
 	'test_shell_ps60.hlsl',
 ]
+
+[spirv_big]
+files = [
+	'test_big_ps60.hlsl',
+]

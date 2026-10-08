@@ -1,4 +1,4 @@
-//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright ï¿½ 1996-2005, Valve Corporation, All rights reserved. ============//
 //
 // Purpose:
 //
@@ -1080,7 +1080,18 @@ void CompileScheduler::HandleCommandResponse( Slot& slot, CfgProcessor::ComboHan
 	const uint64_t iComboIndex                   = Combo_GetComboNum( hCombo );
 	const uint64_t iCommandNumber                = Combo_GetCommandNum( hCombo );
 
-	if ( pResponse->Succeeded() )
+	// The engine unpacks a dynamic combo block into a fixed MAX_SHADER_UNPACKED_BLOCK_SIZE buffer without a bounds check
+	constexpr size_t nComboLimit = MAX_SHADER_UNPACKED_BLOCK_SIZE - 17;
+	bool bSucceeded              = pResponse->Succeeded();
+	char chOversizeListing[512]  = {};
+	if ( bSucceeded && pResponse->GetResultBufferLen() > nComboLimit )
+	{
+		bSucceeded = false;
+		sprintf_s( chOversizeListing, sizeof( chOversizeListing ), "%s(0,0): error 0000: combo is %zu bytes, the engine limit is %zu bytes",
+				   pEntryInfo->m_szShaderFileName.data(), pResponse->GetResultBufferLen(), nComboLimit );
+	}
+
+	if ( bSucceeded )
 	{
 		std::lock_guard guard{ Threading::g_mtxGlobal };
 		const uint64_t nStComboIdx = iComboIndex / pEntryInfo->m_numDynamicCombos;
@@ -1094,8 +1105,8 @@ void CompileScheduler::HandleCommandResponse( Slot& slot, CfgProcessor::ComboHan
 	}
 
 	// Process listing even if the shader succeeds for warnings
-	const char* szListing = pResponse->GetListing();
-	if ( szListing || !pResponse->Succeeded() )
+	const char* szListing = chOversizeListing[0] ? chOversizeListing : pResponse->GetListing();
+	if ( szListing || !bSucceeded )
 	{
 		char chUnreportedListing[0xFF];
 		if ( !szListing )
@@ -1108,7 +1119,7 @@ void CompileScheduler::HandleCommandResponse( Slot& slot, CfgProcessor::ComboHan
 		Combo_FormatCommandHumanReadable( hCombo, chBuffer );
 
 		ErrMsgDispatchMsgLine( chBuffer, szListing, pEntryInfo->m_szName );
-		if ( !pResponse->Succeeded() && g_bFastFail )
+		if ( !bSucceeded && g_bFastFail )
 			Stop();
 	}
 

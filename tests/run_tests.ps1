@@ -103,5 +103,11 @@ $psInc = Join-Path $out 'include\test_shell_ps60.inc'
 $psIncText = if ( Test-Path $psInc ) { Get-Content $psInc -Raw } else { '' }
 Check 'spirv ps inc with cshader.h' ( $psIncText -match 'cshader\.h' ) 'inc content'
 
+# combo larger than the engine unpack block
+$r = RunIn ( Join-Path $PSScriptRoot 'spirv' ) 'spirv_big' $Exe
+Check 'big combo exit code' ( $r.Code -ne 0 ) 'exit 0'
+Check 'big combo message' ( $r.Log -match 'combo is \d+ bytes, the engine limit is 131055 bytes' ) "message`n$($r.Log)"
+Check 'big combo no vcs' ( -not ( Test-Path ( Join-Path $out 'shaders\fxc\test_big_ps60.vcs' ) ) ) 'vcs written'
+
 Write-Output "failed: $failed"
 exit $failed
