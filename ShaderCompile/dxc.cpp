@@ -408,11 +408,14 @@ namespace
 				case 'v':
 					args.emplace_back( L"-DOTM_STAGE_VS=1" );
 					break;
+				// DXVK creates every stage with the entry point name "main"
 				case 'h':
 					args.emplace_back( L"-DOTM_STAGE_HS=1" );
+					args.emplace_back( L"-fspv-entrypoint-name=main" );
 					break;
 				case 'd':
 					args.emplace_back( L"-DOTM_STAGE_DS=1" );
+					args.emplace_back( L"-fspv-entrypoint-name=main" );
 					break;
 				default:
 					args.emplace_back( L"-DOTM_STAGE_PS=1" );

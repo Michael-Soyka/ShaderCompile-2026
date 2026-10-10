@@ -151,8 +151,9 @@ def main_stages( path, expected, expected_tess, bindings ):
         tess += 1 if len( kinds ) == 3 else 0
         for kind, spirv in stages:
             info = reflect( spirv )
-            if not any( model == STAGE_EXEC_MODEL[kind] for model, _ in info['entries'] ):
-                print( f'{path}: combo {combo_id} stage {kind} has no execution model {STAGE_EXEC_MODEL[kind]}: {info["entries"]}' )
+            # DXVK creates every stage with the entry point name "main"
+            if ( STAGE_EXEC_MODEL[kind], 'main' ) not in info['entries']:
+                print( f'{path}: combo {combo_id} stage {kind} has no entry "main" with execution model {STAGE_EXEC_MODEL[kind]}: {info["entries"]}' )
                 return 1
 
             if not info['bindings'] <= bindings:
