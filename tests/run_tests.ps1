@@ -103,6 +103,17 @@ $psInc = Join-Path $out 'include\test_shell_ps60.inc'
 $psIncText = if ( Test-Path $psInc ) { Get-Content $psInc -Raw } else { '' }
 Check 'spirv ps inc with cshader.h' ( $psIncText -match 'cshader\.h' ) 'inc content'
 
+# VS with hull and domain stages: shell v2 for TESS=1, v1 for TESS=0
+$r = RunIn ( Join-Path $PSScriptRoot 'spirv' ) 'spirv_tess' $Exe
+Check 'tess exit code' ( $r.Code -eq 0 ) "exit $($r.Code)`n$($r.Log)"
+$tess = Join-Path $out 'shaders\fxc\test_tess_vs60.vcs'
+Check 'tess vcs' ( Test-Path $tess ) 'missing'
+if ( Test-Path $tess )
+{
+	python ( Join-Path $PSScriptRoot 'verify_spirv.py' ) $tess 2 vs-stages 1 '0' | Write-Output
+	Check 'tess shell v2' ( $LASTEXITCODE -eq 0 ) 'verify_spirv failed'
+}
+
 # combo larger than the engine unpack block
 $r = RunIn ( Join-Path $PSScriptRoot 'spirv' ) 'spirv_big' $Exe
 Check 'big combo exit code' ( $r.Code -ne 0 ) 'exit 0'

@@ -27,6 +27,8 @@ STORAGE_OUTPUT = 3
 EXEC_MODEL = { 'vs': 0, 'ps': 4 }
 VERSION_TOKEN = { 'vs': 0xFFFE0300, 'ps': 0xFFFF0300 }
 SHELL_MARKER = b'OTM_DXVK_SHADER\0'
+SHELL_MARKER_STAGES = b'OTM_DXVK_STAGES\0'
+STAGE_EXEC_MODEL = { 0: 0, 1: 1, 2: 2 }   # VS Vertex, HS TessellationControl, DS TessellationEvaluation
 
 
 def read_block( data, pos ):
@@ -87,6 +89,87 @@ def entry_points( code ):
         i += count
 
     return found
+
+
+def shell_payload( code, stage ):
+    words = struct.unpack( f'<{len( code ) // 4}I', code )
+    if words[0] != VERSION_TOKEN[stage]:
+        raise ValueError( f'bad version token {words[0]:#x}' )
+
+    payload = []
+    pos = 1
+    while ( words[pos] & 0xFFFF ) == 0xFFFE:
+        count = words[pos] >> 16
+        payload += words[pos + 1:pos + 1 + count]
+        pos += 1 + count
+
+    if words[pos] != 0x0000FFFF or pos + 1 != len( words ):
+        raise ValueError( 'no end token after the comments' )
+
+    return payload
+
+
+# [( stage, spirv bytes )], one VS entry for a v1 shell
+def unwrap_stages( code, stage ):
+    payload = shell_payload( code, stage )
+    marker = struct.pack( '<4I', *payload[:4] )
+    if marker == SHELL_MARKER:
+        return [ ( 0, unwrap_shell( code, stage ) ) ]
+
+    if marker != SHELL_MARKER_STAGES:
+        raise ValueError( 'no OTM_DXVK_SHADER / OTM_DXVK_STAGES marker' )
+
+    count = payload[4]
+    table = [ ( payload[5 + ( i * 2 )], payload[6 + ( i * 2 )] ) for i in range( count ) ]
+    pos = 5 + ( count * 2 )
+    stages = []
+    for kind, size in table:
+        stages.append( ( kind, struct.pack( f'<{size}I', *payload[pos:pos + size] ) ) )
+        pos += size
+
+    if pos != len( payload ):
+        raise ValueError( f'stage sizes {pos} != payload {len( payload )}' )
+
+    return stages
+
+
+def main_stages( path, expected, expected_tess, bindings ):
+    data = open( path, 'rb' ).read()
+    combos = read_vcs_combos( data )
+    if len( combos ) != expected:
+        print( f'{path}: {len( combos )} combos, expected {expected}' )
+        return 1
+
+    tess = 0
+    for combo_id, code in combos:
+        stages = unwrap_stages( code, 'vs' )
+        kinds = [ kind for kind, _ in stages ]
+        if kinds not in ( [ 0 ], [ 0, 1, 2 ] ):
+            print( f'{path}: combo {combo_id} stages {kinds}, expected [0] or [0, 1, 2]' )
+            return 1
+
+        tess += 1 if len( kinds ) == 3 else 0
+        for kind, spirv in stages:
+            info = reflect( spirv )
+            if not any( model == STAGE_EXEC_MODEL[kind] for model, _ in info['entries'] ):
+                print( f'{path}: combo {combo_id} stage {kind} has no execution model {STAGE_EXEC_MODEL[kind]}: {info["entries"]}' )
+                return 1
+
+            if not info['bindings'] <= bindings:
+                print( f'{path}: combo {combo_id} stage {kind} bindings {sorted( info["bindings"] )} not in {sorted( bindings )}' )
+                return 1
+
+            for var in info['io'] - info['builtins']:
+                if var not in info['semantics']:
+                    print( f'{path}: combo {combo_id} stage {kind} variable %{var} has no UserSemantic' )
+                    return 1
+
+    if tess != expected_tess:
+        print( f'{path}: {tess} combos with hull and domain stages, expected {expected_tess}' )
+        return 1
+
+    print( f'{path}: {len( combos )} combos ok, {tess} with hull and domain stages' )
+    return 0
 
 
 def unwrap_shell( code, stage ):
@@ -212,6 +295,11 @@ def main():
     path = sys.argv[1]
     expected = int( sys.argv[2] )
     mode = sys.argv[3] if len( sys.argv ) > 3 else 'main'
+
+    if mode == 'vs-stages':
+        # verify_spirv.py <vcs> <combos> vs-stages <combos with HS/DS> <binding,binding,...>
+        bindings = { int( b ) for b in sys.argv[5].split( ',' ) }
+        return main_stages( path, expected, int( sys.argv[4] ), bindings )
 
     if mode in ( 'vs', 'ps' ):
         # verify_spirv.py <vcs> <combos> <vs|ps> <binding,binding,...> [member=offset ...]

@@ -8,3 +8,8 @@ files = [
 files = [
 	'test_big_ps60.hlsl',
 ]
+
+[spirv_tess]
+files = [
+	'test_tess_vs60.hlsl',
+]

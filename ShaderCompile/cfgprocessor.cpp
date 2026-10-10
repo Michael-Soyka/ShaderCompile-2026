@@ -863,7 +863,8 @@ CfgProcessor::ComboBuildCommand ComboHandleImpl::BuildCommand() const
 	const Define* const pDefVarsEnd = m_pEntry->m_pCg->GetDefinesEnd();
 	const Define* pSetDef;
 
-	CfgProcessor::ComboBuildCommand command{ m_pEntry->m_eiInfo.m_szEntryPoint, m_pEntry->m_szShaderSrc, m_pEntry->m_eiInfo.m_szShaderVersion };
+	CfgProcessor::ComboBuildCommand command{ m_pEntry->m_eiInfo.m_szEntryPoint, m_pEntry->m_szShaderSrc, m_pEntry->m_eiInfo.m_szShaderVersion,
+		m_pEntry->m_eiInfo.m_szHullEntry, m_pEntry->m_eiInfo.m_szDomainEntry, m_pEntry->m_eiInfo.m_szTessCombo };
 	command.defines.reserve( m_pEntry->m_pCg->DefineCount() + 2 );
 
 	char tmpBuf[24]{};
@@ -973,6 +974,9 @@ static void SetupConfiguration( const std::vector<CfgProcessor::ShaderConfig>& c
 		info.m_szShaderFileName = cfg.m_szShaderSrc;
 		info.m_szShaderVersion = *s_strPool.emplace( baseTemplate ).first;
 		info.m_szEntryPoint = *s_strPool.emplace( conf.main ).first;
+		info.m_szHullEntry = *s_strPool.emplace( conf.hull ).first;
+		info.m_szDomainEntry = *s_strPool.emplace( conf.domain ).first;
+		info.m_szTessCombo = *s_strPool.emplace( conf.tessCombo ).first;
 		info.m_numCombos = cg.NumCombos();
 		info.m_numDynamicCombos = cg.NumCombos( false );
 		info.m_numStaticCombos = cg.NumCombos( true );

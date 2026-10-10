@@ -307,6 +307,183 @@ namespace
 	}
 }
 
+namespace
+{
+	constexpr char s_szStagesMarker[16] = "OTM_DXVK_STAGES";
+
+	// Shell v2: version, comment chunks with marker + stage table + SPIR-V of every stage, end token
+	std::vector<char> WrapInShellStages( const std::vector<std::vector<char>>& stages )
+	{
+		std::vector<uint32_t> payload( 5 );
+		std::memcpy( payload.data(), s_szStagesMarker, sizeof( s_szStagesMarker ) );
+		payload[4] = gsl::narrow<uint32_t>( stages.size() );
+
+		for ( size_t i = 0; i < stages.size(); i++ )
+		{
+			payload.push_back( gsl::narrow<uint32_t>( i ) );
+			payload.push_back( gsl::narrow<uint32_t>( stages[i].size() / sizeof( uint32_t ) ) );
+		}
+
+		for ( const std::vector<char>& spirv : stages )
+		{
+			const size_t nWords = spirv.size() / sizeof( uint32_t );
+			const size_t nPos = payload.size();
+			payload.resize( nPos + nWords );
+			std::memcpy( payload.data() + nPos, spirv.data(), nWords * sizeof( uint32_t ) );
+		}
+
+		std::vector<uint32_t> words;
+		words.push_back( s_nVsVersionToken );
+
+		for ( size_t pos = 0; pos < payload.size(); pos += s_nMaxCommentWords )
+		{
+			const size_t nCount = std::min<size_t>( s_nMaxCommentWords, payload.size() - pos );
+			words.push_back( ( gsl::narrow<uint32_t>( nCount ) << 16 ) | s_nCommentToken );
+			words.insert( words.end(), payload.begin() + pos, payload.begin() + pos + nCount );
+		}
+
+		words.push_back( s_nEndToken );
+
+		std::vector<char> result( words.size() * sizeof( uint32_t ) );
+		std::memcpy( result.data(), words.data(), result.size() );
+		return result;
+	}
+
+	// Hull and domain stages are compiled for this combo: declared, and the enabling combo is not 0
+	bool HasTessellation( const CfgProcessor::ComboBuildCommand& command )
+	{
+		if ( command.hullEntry.empty() || command.domainEntry.empty() )
+		{
+			return false;
+		}
+
+		if ( command.tessCombo.empty() )
+		{
+			return true;
+		}
+
+		for ( const auto& [name, value] : command.defines )
+		{
+			if ( name == command.tessCombo )
+			{
+				return value != "0";
+			}
+		}
+
+		return false;
+	}
+
+	// One DXC run; cStage: 'v', 'h', 'd', 'p' run inside our DXVK, anything else is compute
+	bool CompileStage( const CSharedFile* pSource, const std::string& mainKey, const CfgProcessor::ComboBuildCommand& command,
+		std::string_view entryPoint, const std::string& shaderModel, unsigned int flags, std::vector<char>& code, std::string& listing )
+	{
+		std::vector<std::wstring> args;
+		args.emplace_back( Widen( mainKey ) );
+		args.emplace_back( L"-E" );
+		args.emplace_back( Widen( entryPoint ) );
+		args.emplace_back( L"-T" );
+		args.emplace_back( Widen( shaderModel ) );
+		args.emplace_back( L"-spirv" );
+		args.emplace_back( L"-fspv-target-env=vulkan1.1" );
+		args.emplace_back( L"-HV" );
+		args.emplace_back( L"2021" );
+		args.emplace_back( L"-I" );
+		args.emplace_back( L"." );
+
+		// Graphics stages run inside our DXVK: D3D9 constant layout, binding of $Globals, semantics for linking.
+		// Hull and domain see the vertex shader resources
+		const char cStage = shaderModel.empty() ? 'c' : shaderModel[0];
+		const bool bPixel = cStage == 'p';
+		const bool bGraphics = bPixel || ( cStage == 'v' ) || ( cStage == 'h' ) || ( cStage == 'd' );
+		if ( bGraphics )
+		{
+			args.emplace_back( L"-fvk-use-dx-layout" );
+			args.emplace_back( L"-fspv-reflect" );
+			args.emplace_back( L"-fvk-bind-globals" );
+			args.emplace_back( bPixel ? L"10" : L"0" );
+			args.emplace_back( L"0" );
+
+			switch ( cStage )
+			{
+				case 'v':
+					args.emplace_back( L"-DOTM_STAGE_VS=1" );
+					break;
+				case 'h':
+					args.emplace_back( L"-DOTM_STAGE_HS=1" );
+					break;
+				case 'd':
+					args.emplace_back( L"-DOTM_STAGE_DS=1" );
+					break;
+				default:
+					args.emplace_back( L"-DOTM_STAGE_PS=1" );
+					break;
+			}
+		}
+
+		// fxc's "file(line,col): warning ..." shape, source and caret lines are dropped by DiagnosticLines
+		args.emplace_back( L"-fdiagnostics-format=msvc" );
+		args.emplace_back( ( flags & D3DCOMPILE_SKIP_OPTIMIZATION ) ? L"-Od" : L"-O3" );
+
+		if ( flags & D3DCOMPILE_SKIP_VALIDATION )
+		{
+			args.emplace_back( L"-Vd" );
+		}
+
+		for ( const auto& [name, value] : command.defines )
+		{
+			args.emplace_back( L"-D" + Widen( name ) + L"=" + Widen( value ) );
+		}
+
+		std::vector<LPCWSTR> argPtrs;
+		argPtrs.reserve( args.size() );
+		for ( const std::wstring& arg : args )
+		{
+			argPtrs.emplace_back( arg.c_str() );
+		}
+
+		const DxcBuffer buffer{ pSource->Data(), pSource->Size(), DXC_CP_UTF8 };
+		DxcInclude include( t_State.pUtils );
+
+		IDxcResult* pResult = nullptr;
+		const HRESULT hr = t_State.pCompiler->Compile( &buffer, argPtrs.data(), gsl::narrow<UINT32>( argPtrs.size() ), &include, IID_PPV_ARGS( &pResult ) );
+
+		HRESULT status = E_FAIL;
+		code.clear();
+
+		if ( pResult )
+		{
+			pResult->GetStatus( &status );
+
+			IDxcBlobUtf8* pErrors = nullptr;
+			if ( SUCCEEDED( pResult->GetOutput( DXC_OUT_ERRORS, IID_PPV_ARGS( &pErrors ), nullptr ) ) && pErrors )
+			{
+				listing += DiagnosticLines( std::string_view( pErrors->GetStringPointer(), pErrors->GetStringLength() ) );
+				pErrors->Release();
+			}
+
+			IDxcBlob* pObject = nullptr;
+			if ( SUCCEEDED( status ) && SUCCEEDED( pResult->GetOutput( DXC_OUT_OBJECT, IID_PPV_ARGS( &pObject ), nullptr ) ) && pObject )
+			{
+				const char* pBytes = static_cast<const char*>( pObject->GetBufferPointer() );
+				code.assign( pBytes, pBytes + pObject->GetBufferSize() );
+				pObject->Release();
+			}
+
+			pResult->Release();
+		}
+
+		// Same file name in two folders: the SPIR-V may hold the wrong header, never accept it
+		const bool bConflict = !include.GetConflict().empty();
+		if ( bConflict )
+		{
+			listing = include.GetConflict() + listing;
+		}
+
+		const bool bSucceeded = SUCCEEDED( hr ) && SUCCEEDED( status ) && !code.empty() && !bConflict;
+		return bSucceeded;
+	}
+}
+
 void Dxc::ExecuteCommand( const CfgProcessor::ComboBuildCommand& command, CmdSink::IResponse*& pResponse, unsigned int flags )
 {
 	const DxcCreateInstanceProc pCreate = LoadDxc();
@@ -336,97 +513,40 @@ void Dxc::ExecuteCommand( const CfgProcessor::ComboBuildCommand& command, CmdSin
 		return;
 	}
 
-	std::vector<std::wstring> args;
-	args.emplace_back( Widen( mainKey ) );
-	args.emplace_back( L"-E" );
-	args.emplace_back( Widen( command.entryPoint ) );
-	args.emplace_back( L"-T" );
-	args.emplace_back( Widen( command.shaderModel ) );
-	args.emplace_back( L"-spirv" );
-	args.emplace_back( L"-fspv-target-env=vulkan1.1" );
-	args.emplace_back( L"-HV" );
-	args.emplace_back( L"2021" );
-	args.emplace_back( L"-I" );
-	args.emplace_back( L"." );
+	const std::string shaderModel( command.shaderModel );
+	const char cStage = shaderModel.empty() ? 'c' : shaderModel[0];
 
-	// vs/ps run inside our DXVK: D3D9 constant layout, binding of $Globals, semantics for linking
-	const char cStage = command.shaderModel.empty() ? 'c' : command.shaderModel[0];
-	const bool bGraphics = ( cStage == 'v' ) || ( cStage == 'p' );
-	if ( bGraphics )
-	{
-		args.emplace_back( L"-fvk-use-dx-layout" );
-		args.emplace_back( L"-fspv-reflect" );
-		args.emplace_back( L"-fvk-bind-globals" );
-		args.emplace_back( ( cStage == 'v' ) ? L"0" : L"10" );
-		args.emplace_back( L"0" );
-		args.emplace_back( ( cStage == 'v' ) ? L"-DOTM_STAGE_VS=1" : L"-DOTM_STAGE_PS=1" );
-	}
-
-	// fxc's "file(line,col): warning ..." shape, source and caret lines are dropped by DiagnosticLines
-	args.emplace_back( L"-fdiagnostics-format=msvc" );
-	args.emplace_back( ( flags & D3DCOMPILE_SKIP_OPTIMIZATION ) ? L"-Od" : L"-O3" );
-
-	if ( flags & D3DCOMPILE_SKIP_VALIDATION )
-	{
-		args.emplace_back( L"-Vd" );
-	}
-
-	for ( const auto& [name, value] : command.defines )
-	{
-		args.emplace_back( L"-D" + Widen( name ) + L"=" + Widen( value ) );
-	}
-
-	std::vector<LPCWSTR> argPtrs;
-	argPtrs.reserve( args.size() );
-	for ( const std::wstring& arg : args )
-	{
-		argPtrs.emplace_back( arg.c_str() );
-	}
-
-	const DxcBuffer buffer{ pSource->Data(), pSource->Size(), DXC_CP_UTF8 };
-	DxcInclude include( t_State.pUtils );
-
-	IDxcResult* pResult = nullptr;
-	const HRESULT hr = t_State.pCompiler->Compile( &buffer, argPtrs.data(), gsl::narrow<UINT32>( argPtrs.size() ), &include, IID_PPV_ARGS( &pResult ) );
-
-	HRESULT status = E_FAIL;
 	std::string listing;
 	std::vector<char> code;
+	bool bSucceeded = CompileStage( pSource, mainKey, command, command.entryPoint, shaderModel, flags, code, listing );
 
-	if ( pResult )
+	if ( bSucceeded && ( cStage == 'v' ) && HasTessellation( command ) )
 	{
-		pResult->GetStatus( &status );
+		// vs_6_x -> hs_6_x / ds_6_x of the same version
+		std::string hullModel( shaderModel );
+		std::string domainModel( shaderModel );
+		hullModel[0] = 'h';
+		domainModel[0] = 'd';
 
-		IDxcBlobUtf8* pErrors = nullptr;
-		if ( SUCCEEDED( pResult->GetOutput( DXC_OUT_ERRORS, IID_PPV_ARGS( &pErrors ), nullptr ) ) && pErrors )
+		std::vector<std::vector<char>> stages( 3 );
+		stages[0] = std::move( code );
+		bSucceeded = CompileStage( pSource, mainKey, command, command.hullEntry, hullModel, flags, stages[1], listing )
+			&& CompileStage( pSource, mainKey, command, command.domainEntry, domainModel, flags, stages[2], listing );
+
+		code.clear();
+		if ( bSucceeded )
 		{
-			listing = DiagnosticLines( std::string_view( pErrors->GetStringPointer(), pErrors->GetStringLength() ) );
-			pErrors->Release();
+			code = WrapInShellStages( stages );
 		}
-
-		IDxcBlob* pObject = nullptr;
-		if ( SUCCEEDED( status ) && SUCCEEDED( pResult->GetOutput( DXC_OUT_OBJECT, IID_PPV_ARGS( &pObject ), nullptr ) ) && pObject )
-		{
-			const char* pBytes = static_cast<const char*>( pObject->GetBufferPointer() );
-			code.assign( pBytes, pBytes + pObject->GetBufferSize() );
-			pObject->Release();
-		}
-
-		pResult->Release();
 	}
-
-	// Same file name in two folders: the SPIR-V may hold the wrong header, never accept it
-	const bool bConflict = !include.GetConflict().empty();
-	if ( bConflict )
-	{
-		listing = include.GetConflict() + listing;
-	}
-
-	const bool bSucceeded = SUCCEEDED( hr ) && SUCCEEDED( status ) && !code.empty() && !bConflict;
-
-	if ( bSucceeded && bGraphics )
+	else if ( bSucceeded && ( ( cStage == 'v' ) || ( cStage == 'p' ) ) )
 	{
 		code = WrapInShell( cStage == 'v', code );
+	}
+
+	if ( !bSucceeded )
+	{
+		code.clear();
 	}
 
 	pResponse = new( std::nothrow ) DxcResponse( std::move( code ), std::move( listing ), bSucceeded );

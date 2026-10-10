@@ -45,6 +45,9 @@ struct ShaderConfig
 {
 	std::string name;
 	std::string main;
+	std::string hull;			// TESSELLATION: hull and domain entries, combo that enables them
+	std::string domain;
+	std::string tessCombo;
 	std::string_view version;
 	std::string_view target;
 	uint32_t centroid_mask;
@@ -63,6 +66,9 @@ struct CfgEntryInfo
 	std::string_view	m_szShaderFileName;		// Name of the src file, e.g. "shader_psxx.fxc"
 	std::string_view	m_szShaderVersion;		// Version of shader
 	std::string_view	m_szEntryPoint;			// Name of main function
+	std::string_view	m_szHullEntry;			// TESSELLATION: hull / domain entries, empty without them
+	std::string_view	m_szDomainEntry;
+	std::string_view	m_szTessCombo;			// Combo enabling the stages, empty for all combos
 	uint64_t			m_numCombos;			// Total possible num of combos, e.g. 1024
 	uint64_t			m_numDynamicCombos;		// Num of dynamic combos, e.g. 4
 	uint64_t			m_numStaticCombos;		// Num of static combos, e.g. 256
@@ -93,6 +99,9 @@ struct ComboBuildCommand
 	std::string_view entryPoint;
 	std::string_view fileName;
 	std::string_view shaderModel;
+	std::string_view hullEntry;
+	std::string_view domainEntry;
+	std::string_view tessCombo;
 	std::vector<std::pair<std::string_view, std::string_view>> defines;
 };
 ComboBuildCommand Combo_BuildCommand( ComboHandle hCombo );

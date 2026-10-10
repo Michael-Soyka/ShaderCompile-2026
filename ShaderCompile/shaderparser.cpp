@@ -44,10 +44,11 @@ namespace r
 	static const RE2 inc( R"reg(#\s*include\s*"(.*)")reg" );
 	static const RE2 xbox_reg( R"reg(\[XBOX\])reg" );
 	static const RE2 pc_reg( R"reg(\[PC\])reg" );
-	static const RE2 start( R"reg(^\s*//\s*(STATIC|DYNAMIC|SKIP|CENTROID|[VPGDHC]S_MAIN)\s*:\s*(.*)$)reg" );
+	static const RE2 start( R"reg(^\s*//\s*(STATIC|DYNAMIC|SKIP|CENTROID|TESSELLATION|[VPGDHC]S_MAIN)\s*:\s*(.*)$)reg" );
 	static const RE2 init( R"reg(\[\s*=\s*([^\]]+)\])reg" );
 	static const RE2 static_combo( R"reg(^\s*//\s*STATIC\s*:\s*"(.*)"\s+"(\d+)\.\.(\d+)".*)reg" );
 	static const RE2 dynamic_combo( R"reg(^\s*//\s*DYNAMIC\s*:\s*"(.*)"\s+"(\d+)\.\.(\d+)".*)reg" );
+	static const RE2 tessellation( R"reg(^\s*"(\w+)"\s+"(\w+)"(?:\s+"(\w+)")?\s*$)reg" );
 	static const RE2 centroid( R"reg(^\s*//\s*CENTROID\s*:\s*TEXCOORD(\d+).*$)reg" );
 	static const RE2 base_name( R"reg(^(.*)_[vpgdhc]s(\d\db|\d\d|\dx|xx))reg" );
 	static const RE2 target( R"reg(^.*_([vpgdhc]s)(\d\db|\d\d|\dx|xx))reg" );
@@ -235,6 +236,20 @@ bool Parser::ParseFile( const std::string& key, const fs::path& root, const std:
 			RE2::GlobalReplace( &value, shouldMatch, {} );
 			RE2::Replace( &value, r::pc_reg, {} );
 			conf.skip.emplace_back( trim( std::move( value ) ) );
+		}
+		else if ( name == "TESSELLATION"sv )
+		{
+			std::string hull, domain, tessCombo;
+			if ( RE2::FullMatch( trim( value ), r::tessellation, &hull, &domain, &tessCombo ) )
+			{
+				conf.hull = hull;
+				conf.domain = domain;
+				conf.tessCombo = tessCombo;
+			}
+			else
+			{
+				std::cout << clr::red << "Bad TESSELLATION line in \""sv << key << "\": "sv << value << clr::reset << std::endl;
+			}
 		}
 		else if ( name == mainCat )
 		{
