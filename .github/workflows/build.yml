@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: windows-latest
@@ -42,7 +46,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "build_${{ github.run_number }}"
-          $archive = "ShaderCompile${{ github.run_number }}.7z"
+          $last = git ls-remote --tags --refs origin 'shadecmp26-*' |
+            ForEach-Object { [version]( $_ -replace '^.*refs/tags/shadecmp26-', '' ) } |
+            Sort-Object | Select-Object -Last 1
+          $version = if ( $last ) { "$($last.Major).$($last.Minor + 1)" } else { '1.1' }
+          $tag = "shadecmp26-$version"
+          $archive = "ShaderCompile26-$version.7z"
           7z a $archive ./staging/*
           gh release create $tag $archive staging/bin/ShaderCompile26.exe --target ${{ github.sha }} --title $tag --generate-notes
